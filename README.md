@@ -1,4 +1,4 @@
-# cafeTelkom Go Service Scaffold
+# Golang Backend Service
 
 Production-ready backend scaffold aligned with the architecture in `docs/architecture/final-architecture-tech-stack.md`.
 
