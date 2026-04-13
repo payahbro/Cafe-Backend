@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cafe-api
+    env_file:
+      - .env
+    environment:
+      APP_PORT: "8080"
+      REDIS_ADDR: "redis:6379"
+      # jdbc:postgresql://<SUPABASE_DB_HOST>:<SUPABASE_DB_PORT>/<SUPABASE_DB_NAME>?user=<SUPABASE_DB_USER>&password=<SUPABASE_DB_PASSWORD>
+      SUPABASE_JDBC_URL: "jdbc:postgresql://${SUPABASE_DB_HOST:-aws-1-ap-northeast-2.pooler.supabase.com}:${SUPABASE_DB_PORT:-5432}/${SUPABASE_DB_NAME:-postgres}?user=${SUPABASE_DB_USER:-postgres.<project-ref>}&password=${SUPABASE_DB_PASSWORD:-<your-password>}"
+      # Supabase session pooler (external managed service)
+      SUPABASE_DB_HOST: "${SUPABASE_DB_HOST:-aws-1-ap-northeast-2.pooler.supabase.com}"
+      SUPABASE_DB_PORT: "${SUPABASE_DB_PORT:-5432}"
+      SUPABASE_DB_NAME: "${SUPABASE_DB_NAME:-postgres}"
+      SUPABASE_DB_USER: "${SUPABASE_DB_USER:-postgres.<project-ref>}"
+      SUPABASE_DB_PASSWORD: "${SUPABASE_DB_PASSWORD:-<your-password>}"
+      SUPABASE_DB_SSLMODE: "${SUPABASE_DB_SSLMODE:-require}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: cafe-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Marker service so compose clearly includes Supabase dependency.
+  # Actual Postgres is external via Supabase session pooler.
+  supabase:
+    image: alpine:3.20
+    container_name: cafe-supabase-session-pooler
+    command: ["sh", "-c", "echo 'Using external Supabase pooler: aws-1-ap-northeast-2.pooler.supabase.com:5432'; sleep infinity"]
+
+

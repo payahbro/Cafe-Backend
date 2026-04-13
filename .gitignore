@@ -1,0 +1,19 @@
+# Local environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+bin/
+*.exe
+*.test
+
+# IDE/system
+.idea/
+.DS_Store
+
+# Private/local project artifacts
+.agents/
+docs/
+skills-lock.json
+
