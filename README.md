@@ -197,9 +197,3 @@ curl http://localhost:8080/health
 docker compose up --build
 ```
 
-## Catatan Operasional
-
-- Supabase adalah dependency eksternal (bukan Postgres container lokal).
-- Set `DB_REQUIRED=true` dan/atau `REDIS_REQUIRED=true` untuk mode **fail-fast** saat dependency wajib tidak tersedia.
-- Untuk flow Payment → Order dan Order → Cart clearing, gunakan endpoint internal yang memerlukan `X-Internal-Api-Key`.
-
