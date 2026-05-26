@@ -14,6 +14,7 @@ type Config struct {
 	Redis    RedisConfig
 	Database DatabaseConfig
 	Internal InternalConfig
+	Supabase SupabaseConfig
 }
 
 type AppConfig struct {
@@ -58,6 +59,11 @@ type InternalConfig struct {
 	APIKey string `env:"INTERNAL_API_KEY" envDefault:"change-me"`
 }
 
+type SupabaseConfig struct {
+	URL     string `env:"SUPABASE_URL"`
+	AnonKey string `env:"SUPABASE_ANON_KEY"`
+}
+
 func Load() (Config, error) {
 	// Ignore missing .env so runtime env vars still work in containers/CI.
 	_ = godotenv.Load()
@@ -93,5 +99,3 @@ func (c Config) DatabaseURL() string {
 		c.Database.SSLMode,
 	)
 }
-
-

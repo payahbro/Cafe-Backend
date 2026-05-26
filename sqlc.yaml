@@ -9,6 +9,7 @@ sql:
       - "internal/db/query/order.sql"
       - "internal/db/query/payment.sql"
       - "internal/db/query/outbox.sql"
+      - "internal/db/query/user.sql"
     gen:
       go:
         package: "repository"
@@ -17,4 +18,3 @@ sql:
         emit_interface: true
         emit_json_tags: true
         emit_empty_slices: true
-
