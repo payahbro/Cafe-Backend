@@ -11,6 +11,7 @@ services:
       REDIS_ADDR: "redis:6379"
       SUPABASE_URL: "${SUPABASE_URL}"
       SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}"
+      DB_REQUIRED: "true"
       # jdbc:postgresql://<SUPABASE_DB_HOST>:<SUPABASE_DB_PORT>/<SUPABASE_DB_NAME>?user=<SUPABASE_DB_USER>&password=<SUPABASE_DB_PASSWORD>
       SUPABASE_JDBC_URL: "jdbc:postgresql://${SUPABASE_DB_HOST:-aws-1-ap-northeast-2.pooler.supabase.com}:${SUPABASE_DB_PORT:-5432}/${SUPABASE_DB_NAME:-postgres}?user=${SUPABASE_DB_USER:-postgres.<project-ref>}&password=${SUPABASE_DB_PASSWORD:-<your-password>}"
       # Supabase session pooler (external managed service)
@@ -25,6 +26,34 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      product-seed:
+        condition: service_completed_successfully
+
+  product-seed:
+    image: postgres:16-alpine
+    container_name: cafe-product-seed
+    env_file:
+      - .env
+    environment:
+      SUPABASE_DB_HOST: "${SUPABASE_DB_HOST:-aws-1-ap-northeast-2.pooler.supabase.com}"
+      SUPABASE_DB_PORT: "${SUPABASE_DB_PORT:-5432}"
+      SUPABASE_DB_NAME: "${SUPABASE_DB_NAME:-postgres}"
+      SUPABASE_DB_USER: "${SUPABASE_DB_USER:-postgres.<project-ref>}"
+      PGPASSWORD: "${SUPABASE_DB_PASSWORD:-<your-password>}"
+      PGSSLMODE: "${SUPABASE_DB_SSLMODE:-require}"
+    volumes:
+      - ./internal/db/seeds:/seeds:ro
+    command:
+      - sh
+      - -c
+      - >
+        psql
+        -h "$${SUPABASE_DB_HOST}"
+        -p "$${SUPABASE_DB_PORT}"
+        -U "$${SUPABASE_DB_USER}"
+        -d "$${SUPABASE_DB_NAME}"
+        -v ON_ERROR_STOP=1
+        -f /seeds/products.sql
 
   redis:
     image: redis:7-alpine

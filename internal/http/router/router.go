@@ -30,11 +30,13 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 		repo,
 	)
 	userService := service.NewUserService(repo)
+	productService := service.NewProductService(repo)
 
 	// Handler/HTTP
 	healthHandler := handler.NewHealthHandler(cfg, dbPool, redisClient)
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService, cfg.Supabase.URL)
+	productHandler := handler.NewProductHandler(productService, cfg.Supabase.URL)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -51,6 +53,12 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Users.Use(middleware.AuthRequired(jwtVerifier, repo))
 	v1Users.GET("/profile", userHandler.GetProfile)
 	v1Users.PATCH("/profile", userHandler.UpdateProfile)
+
+	// product
+	v1Products := v1.Group("/products")
+	v1Products.GET("", productHandler.ListProducts)
+	v1Products.POST("", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), productHandler.CreateProduct)
+	v1Products.GET("/:id", productHandler.GetProduct)
 
 	return r
 }
