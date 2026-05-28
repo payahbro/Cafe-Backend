@@ -1,6 +1,7 @@
 package router
 
 import (
+	"cafeTelkom/internal/cache"
 	"cafeTelkom/internal/config"
 	"cafeTelkom/internal/http/handler"
 	"cafeTelkom/internal/http/middleware"
@@ -30,7 +31,12 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 		repo,
 	)
 	userService := service.NewUserService(repo)
-	productService := service.NewProductService(repo)
+	productTxRunner := service.NewProductTxRunner(dbPool, repo)
+	var productCache service.ProductCacheInvalidator
+	if redisClient != nil {
+		productCache = cache.NewProductCache(redisClient)
+	}
+	productService := service.NewProductService(repo, productTxRunner, productCache)
 
 	// Handler/HTTP
 	healthHandler := handler.NewHealthHandler(cfg, dbPool, redisClient)

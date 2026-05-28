@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cafedb "cafeTelkom/internal/db"
 	"cafeTelkom/internal/repository"
 
 	"github.com/jackc/pgx/v5"
@@ -27,8 +28,23 @@ type productRepository interface {
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
 }
 
+type productTxRunner interface {
+	Run(ctx context.Context, fn func(productRepository) error) error
+}
+
+type ProductCacheInvalidator interface {
+	InvalidateProductLists(ctx context.Context) error
+}
+
+type ProductTxRunner struct {
+	db   cafedb.TxBeginner
+	repo *repository.Queries
+}
+
 type ProductService struct {
-	repo productRepository
+	repo     productRepository
+	txRunner productTxRunner
+	cache    ProductCacheInvalidator
 }
 
 type ListProductsInput struct {
@@ -68,8 +84,29 @@ type CreateProductInput struct {
 	Attributes  []byte
 }
 
-func NewProductService(repo productRepository) *ProductService {
-	return &ProductService{repo: repo}
+func NewProductService(repo productRepository, txRunner productTxRunner, cache ProductCacheInvalidator) *ProductService {
+	return &ProductService{
+		repo:     repo,
+		txRunner: txRunner,
+		cache:    cache,
+	}
+}
+
+func NewProductTxRunner(db cafedb.TxBeginner, repo *repository.Queries) *ProductTxRunner {
+	if db == nil || repo == nil {
+		return nil
+	}
+	return &ProductTxRunner{db: db, repo: repo}
+}
+
+func (r *ProductTxRunner) Run(ctx context.Context, fn func(productRepository) error) error {
+	if r == nil || r.db == nil || r.repo == nil {
+		return errors.New("product transaction runner missing")
+	}
+
+	return cafedb.WithTx(ctx, r.db, func(ctx context.Context, tx pgx.Tx) error {
+		return fn(r.repo.WithTx(tx))
+	})
 }
 
 func (s *ProductService) ListProducts(ctx context.Context, input ListProductsInput) (*ProductList, error) {
@@ -135,37 +172,53 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 	if s.repo == nil {
 		return nil, errors.New("database repository missing")
 	}
-
-	name := strings.TrimSpace(input.Name)
-	if _, err := s.repo.GetProductByNameCI(ctx, name); err == nil {
-		return nil, ErrProductNameAlreadyExists
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("check product name: %w", err)
+	if s.txRunner == nil {
+		return nil, errors.New("product transaction runner missing")
 	}
 
+	name := strings.TrimSpace(input.Name)
 	status := input.Status
 	if status == "" {
 		status = string(repository.ProductStatusAvailable)
 	}
 
-	row, err := s.repo.CreateProduct(ctx, repository.CreateProductParams{
-		Name:        name,
-		Description: optionalText(input.Description),
-		Price:       input.Price,
-		Category:    repository.ProductCategory(input.Category),
-		Status:      repository.ProductStatus(status),
-		ImageUrl:    pgtype.Text{String: input.ImageURL, Valid: input.ImageURL != ""},
-		Attributes:  input.Attributes,
-		Stock:       0,
+	var row repository.Product
+	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		if _, err := repo.GetProductByNameCI(ctx, name); err == nil {
+			return ErrProductNameAlreadyExists
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("check product name: %w", err)
+		}
+
+		created, err := repo.CreateProduct(ctx, repository.CreateProductParams{
+			Name:        name,
+			Description: optionalText(input.Description),
+			Price:       input.Price,
+			Category:    repository.ProductCategory(input.Category),
+			Status:      repository.ProductStatus(status),
+			ImageUrl:    pgtype.Text{String: input.ImageURL, Valid: input.ImageURL != ""},
+			Attributes:  input.Attributes,
+			Stock:       0,
+		})
+		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrProductNameAlreadyExists
+			}
+			return fmt.Errorf("create product: %w", err)
+		}
+
+		row = created
+		return nil
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, ErrProductNameAlreadyExists
-		}
-		return nil, fmt.Errorf("create product: %w", err)
+		return nil, err
 	}
 
 	product := productFromRow(row)
+	if s.cache != nil {
+		_ = s.cache.InvalidateProductLists(ctx)
+	}
+
 	return &product, nil
 }
 

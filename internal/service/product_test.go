@@ -22,7 +22,7 @@ func TestProductServiceListProductsMapsRows(t *testing.T) {
 		},
 	}
 
-	service := NewProductService(repo)
+	service := NewProductService(repo, nil, nil)
 	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 1})
 	if err != nil {
 		t.Fatalf("list products: %v", err)
@@ -51,7 +51,7 @@ func TestProductServiceGetProductMapsRow(t *testing.T) {
 		product: productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
 	}
 
-	service := NewProductService(repo)
+	service := NewProductService(repo, nil, nil)
 	product, err := service.GetProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatalf("get product: %v", err)
@@ -70,7 +70,7 @@ func TestProductServiceGetProductMapsRow(t *testing.T) {
 
 func TestProductServiceGetProductRejectsInvalidID(t *testing.T) {
 	repo := &fakeProductRepo{}
-	service := NewProductService(repo)
+	service := NewProductService(repo, nil, nil)
 
 	_, err := service.GetProduct(context.Background(), "not-a-uuid")
 	if !errors.Is(err, ErrInvalidProductID) {
@@ -83,7 +83,7 @@ func TestProductServiceGetProductRejectsInvalidID(t *testing.T) {
 
 func TestProductServiceGetProductReturnsNotFound(t *testing.T) {
 	repo := &fakeProductRepo{err: pgx.ErrNoRows}
-	service := NewProductService(repo)
+	service := NewProductService(repo, nil, nil)
 
 	_, err := service.GetProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
 	if !errors.Is(err, ErrProductNotFound) {
@@ -91,14 +91,18 @@ func TestProductServiceGetProductReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestProductServiceCreateProductCreatesRow(t *testing.T) {
+func TestProductServiceCreateProductCreatesRowInTransactionAndInvalidatesListCache(t *testing.T) {
 	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
-	repo := &fakeProductRepo{
+	baseRepo := &fakeProductRepo{}
+	txRepo := &fakeProductRepo{
 		getByNameErr: pgx.ErrNoRows,
 		product:      productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
 	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	cache.txRunner = txRunner
 	description := "Espresso dengan air panas"
-	service := NewProductService(repo)
+	service := NewProductService(baseRepo, txRunner, cache)
 
 	product, err := service.CreateProduct(context.Background(), CreateProductInput{
 		Name:        " Americano ",
@@ -113,29 +117,43 @@ func TestProductServiceCreateProductCreatesRow(t *testing.T) {
 		t.Fatalf("create product: %v", err)
 	}
 
-	if !repo.createCalled {
-		t.Fatalf("expected create to be called")
+	if !txRunner.called {
+		t.Fatalf("expected transaction runner to be called")
 	}
-	if repo.createArg.Name != "Americano" {
-		t.Fatalf("create name = %q", repo.createArg.Name)
+	if baseRepo.createCalled {
+		t.Fatalf("base repository should not create product outside transaction")
 	}
-	if repo.createArg.Status != repository.ProductStatusAvailable {
-		t.Fatalf("create status = %q", repo.createArg.Status)
+	if !txRepo.createCalled {
+		t.Fatalf("expected transaction repository to create product")
 	}
-	if repo.createArg.Stock != 0 {
-		t.Fatalf("create stock = %d", repo.createArg.Stock)
+	if txRepo.createArg.Name != "Americano" {
+		t.Fatalf("create name = %q", txRepo.createArg.Name)
+	}
+	if txRepo.createArg.Status != repository.ProductStatusAvailable {
+		t.Fatalf("create status = %q", txRepo.createArg.Status)
+	}
+	if txRepo.createArg.Stock != 0 {
+		t.Fatalf("create stock = %d", txRepo.createArg.Stock)
 	}
 	if product.Name != "Americano" {
 		t.Fatalf("product name = %q", product.Name)
 	}
+	if !cache.invalidated {
+		t.Fatalf("expected product list cache invalidation")
+	}
+	if cache.invalidatedBeforeTxDone {
+		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
 }
 
-func TestProductServiceCreateProductRejectsDuplicateName(t *testing.T) {
+func TestProductServiceCreateProductRejectsDuplicateNameInTransaction(t *testing.T) {
 	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
-	repo := &fakeProductRepo{
+	txRepo := &fakeProductRepo{
 		product: productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
 	}
-	service := NewProductService(repo)
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
 
 	_, err := service.CreateProduct(context.Background(), CreateProductInput{
 		Name:       "Americano",
@@ -147,9 +165,73 @@ func TestProductServiceCreateProductRejectsDuplicateName(t *testing.T) {
 	if !errors.Is(err, ErrProductNameAlreadyExists) {
 		t.Fatalf("err = %v", err)
 	}
-	if repo.createCalled {
+	if txRepo.createCalled {
 		t.Fatalf("create should not be called for duplicate name")
 	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when create fails")
+	}
+}
+
+func TestProductServiceCreateProductIgnoresCacheInvalidationError(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		getByNameErr: pgx.ErrNoRows,
+		product:      productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{err: errors.New("redis unavailable")}
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+
+	product, err := service.CreateProduct(context.Background(), CreateProductInput{
+		Name:       "Americano",
+		Price:      25000,
+		Category:   "coffee",
+		ImageURL:   "https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		Attributes: []byte(`{"temperature":["hot"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+	})
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	if product.Name != "Americano" {
+		t.Fatalf("product name = %q", product.Name)
+	}
+	if !cache.invalidated {
+		t.Fatalf("expected cache invalidation attempt")
+	}
+}
+
+type fakeProductTxRunner struct {
+	repo   productRepository
+	called bool
+	done   bool
+	err    error
+}
+
+func (f *fakeProductTxRunner) Run(ctx context.Context, fn func(productRepository) error) error {
+	f.called = true
+	if f.err != nil {
+		f.done = true
+		return f.err
+	}
+	err := fn(f.repo)
+	f.done = true
+	return err
+}
+
+type fakeProductCacheInvalidator struct {
+	txRunner                *fakeProductTxRunner
+	invalidated             bool
+	invalidatedBeforeTxDone bool
+	err                     error
+}
+
+func (f *fakeProductCacheInvalidator) InvalidateProductLists(ctx context.Context) error {
+	f.invalidated = true
+	if f.txRunner != nil && !f.txRunner.done {
+		f.invalidatedBeforeTxDone = true
+	}
+	return f.err
 }
 
 type fakeProductRepo struct {
