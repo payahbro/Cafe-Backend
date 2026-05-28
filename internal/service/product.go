@@ -20,6 +20,7 @@ var (
 	ErrProductNotFound          = errors.New("product not found")
 	ErrProductNameAlreadyExists = errors.New("product name already exists")
 	ErrProductCacheMiss         = errors.New("product cache miss")
+	ErrProductStatusForbidden   = errors.New("product status forbidden")
 )
 
 // Interface
@@ -29,6 +30,7 @@ type productRepository interface {
 	GetProductByNameCI(ctx context.Context, lower string) (repository.Product, error)
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
 	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
+	UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error)
 }
 
 type productTxRunner interface {
@@ -102,6 +104,11 @@ type UpdateProductInput struct {
 	Status      *string
 	ImageURL    *string
 	Attributes  *[]byte
+}
+
+type UpdateProductStatusInput struct {
+	Status    string
+	ActorRole string
 }
 
 func NewProductService(repo productRepository, txRunner productTxRunner, cache ProductCacheInvalidator) *ProductService {
@@ -351,6 +358,52 @@ func (s *ProductService) UpdateProduct(ctx context.Context, productID string, in
 				return ErrProductNameAlreadyExists
 			}
 			return fmt.Errorf("update product: %w", err)
+		}
+
+		row = updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	product := productFromRow(row)
+	if s.cache != nil {
+		_ = s.cache.InvalidateProductLists(ctx)
+		_ = s.cache.InvalidateProductDetail(ctx, normalizedProductID)
+	}
+
+	return &product, nil
+}
+
+func (s *ProductService) UpdateProductStatus(ctx context.Context, productID string, input UpdateProductStatusInput) (*Product, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("product transaction runner missing")
+	}
+	if input.ActorRole == string(repository.UserRolePEGAWAI) && input.Status == string(repository.ProductStatusUnavailable) {
+		return nil, ErrProductStatusForbidden
+	}
+
+	var id pgtype.UUID
+	if err := id.Scan(productID); err != nil {
+		return nil, ErrInvalidProductID
+	}
+	normalizedProductID := id.String()
+
+	var row repository.Product
+	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		updated, err := repo.UpdateProductStatus(ctx, repository.UpdateProductStatusParams{
+			ID:     id,
+			Status: repository.ProductStatus(input.Status),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			return fmt.Errorf("update product status: %w", err)
 		}
 
 		row = updated

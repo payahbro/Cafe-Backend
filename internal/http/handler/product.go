@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"cafeTelkom/internal/http/dto"
+	"cafeTelkom/internal/http/middleware"
 	"cafeTelkom/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,7 @@ type productReader interface {
 	GetProduct(ctx context.Context, productID string) (*service.Product, error)
 	CreateProduct(ctx context.Context, input service.CreateProductInput) (*service.Product, error)
 	UpdateProduct(ctx context.Context, productID string, input service.UpdateProductInput) (*service.Product, error)
+	UpdateProductStatus(ctx context.Context, productID string, input service.UpdateProductStatusInput) (*service.Product, error)
 }
 
 type ProductListResponse struct {
@@ -89,6 +91,10 @@ type UpdateProductRequest struct {
 	Status      *string              `json:"status"`
 	ImageURL    *string              `json:"image_url"`
 	Attributes  *map[string][]string `json:"attributes"`
+}
+
+type UpdateProductStatusRequest struct {
+	Status string `json:"status"`
 }
 
 func NewProductHandler(productService productReader, supabaseURL ...string) *ProductHandler {
@@ -281,6 +287,65 @@ func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 	}
 
 	dto.WriteSuccess(c, http.StatusOK, productDetailResponse(*product), "Produk berhasil diperbarui")
+}
+
+func (h *ProductHandler) UpdateProductStatus(c *gin.Context) {
+	if h.productService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Product service unavailable", nil)
+		return
+	}
+
+	user, ok := middleware.GetAuthenticatedUser(c)
+	if !ok {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	productID := c.Param("id")
+	if !isValidUUID(productID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"id": "ID produk harus berupa UUID",
+		})
+		return
+	}
+
+	var req UpdateProductStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"body": "Payload tidak valid",
+		})
+		return
+	}
+
+	req.Status = strings.TrimSpace(req.Status)
+	if !isAllowedValue(req.Status, []string{"available", "out_of_stock", "unavailable"}) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"status": "Status harus available, out_of_stock, atau unavailable",
+		})
+		return
+	}
+
+	product, err := h.productService.UpdateProductStatus(c.Request.Context(), productID, service.UpdateProductStatusInput{
+		Status:    req.Status,
+		ActorRole: string(user.Role),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrProductNotFound):
+			dto.WriteError(c, http.StatusNotFound, "PRODUCT_NOT_FOUND", "Produk tidak ditemukan", nil)
+		case errors.Is(err, service.ErrProductStatusForbidden):
+			dto.WriteError(c, http.StatusForbidden, "FORBIDDEN", "Role tidak diizinkan", nil)
+		case errors.Is(err, service.ErrInvalidProductID):
+			dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+				"id": "ID produk harus berupa UUID",
+			})
+		default:
+			dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+		}
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, productDetailResponse(*product), "Status produk berhasil diperbarui")
 }
 
 func parseProductLimit(raw string) (int32, bool) {

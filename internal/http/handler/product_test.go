@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"cafeTelkom/internal/http/middleware"
+	"cafeTelkom/internal/repository"
 	"cafeTelkom/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -462,18 +464,160 @@ func TestProductHandlerUpdateProductReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestProductHandlerUpdateProductStatusReturnsUpdated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{
+		product: &service.Product{
+			ID:        "11111111-1111-4111-8111-111111111111",
+			Name:      "Americano",
+			Price:     25000,
+			Category:  "coffee",
+			Status:    "out_of_stock",
+			CreatedAt: time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC),
+		},
+	}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", func(c *gin.Context) {
+		c.Set("authenticated_user", middleware.AuthenticatedUser{Role: repository.UserRoleADMIN})
+		c.Next()
+	}, productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"out_of_stock"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateStatusProductID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("product id = %q", fakeService.updateStatusProductID)
+	}
+	if fakeService.updateStatusInput.Status != "out_of_stock" {
+		t.Fatalf("status input = %q", fakeService.updateStatusInput.Status)
+	}
+	if fakeService.updateStatusInput.ActorRole != string(repository.UserRoleADMIN) {
+		t.Fatalf("actor role = %q", fakeService.updateStatusInput.ActorRole)
+	}
+	if !strings.Contains(resp.Body.String(), `"message":"Status produk berhasil diperbarui"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductStatusRejectsMissingAuthenticatedUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"available"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateStatusCalled {
+		t.Fatalf("service should not be called")
+	}
+}
+
+func TestProductHandlerUpdateProductStatusRejectsInvalidStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", func(c *gin.Context) {
+		c.Set("authenticated_user", middleware.AuthenticatedUser{Role: repository.UserRoleADMIN})
+		c.Next()
+	}, productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"invalid"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateStatusCalled {
+		t.Fatalf("service should not be called")
+	}
+	if !strings.Contains(resp.Body.String(), `"status"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductStatusReturnsForbiddenForPegawaiUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductStatusForbidden}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", func(c *gin.Context) {
+		c.Set("authenticated_user", middleware.AuthenticatedUser{Role: repository.UserRolePEGAWAI})
+		c.Next()
+	}, productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"unavailable"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"FORBIDDEN"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductStatusReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductNotFound}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", func(c *gin.Context) {
+		c.Set("authenticated_user", middleware.AuthenticatedUser{Role: repository.UserRoleADMIN})
+		c.Next()
+	}, productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"available"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_NOT_FOUND"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
 type fakeProductReader struct {
-	list            *service.ProductList
-	product         *service.Product
-	err             error
-	listInput       service.ListProductsInput
-	createInput     service.CreateProductInput
-	updateInput     service.UpdateProductInput
-	productID       string
-	updateProductID string
-	productCalled   bool
-	createCalled    bool
-	updateCalled    bool
+	list                  *service.ProductList
+	product               *service.Product
+	err                   error
+	listInput             service.ListProductsInput
+	createInput           service.CreateProductInput
+	updateInput           service.UpdateProductInput
+	updateStatusInput     service.UpdateProductStatusInput
+	productID             string
+	updateProductID       string
+	updateStatusProductID string
+	productCalled         bool
+	createCalled          bool
+	updateCalled          bool
+	updateStatusCalled    bool
 }
 
 func (f *fakeProductReader) ListProducts(_ context.Context, input service.ListProductsInput) (*service.ProductList, error) {
@@ -512,6 +656,19 @@ func (f *fakeProductReader) UpdateProduct(_ context.Context, productID string, i
 	f.updateCalled = true
 	f.updateProductID = productID
 	f.updateInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.product == nil {
+		return nil, errors.New("missing product")
+	}
+	return f.product, nil
+}
+
+func (f *fakeProductReader) UpdateProductStatus(_ context.Context, productID string, input service.UpdateProductStatusInput) (*service.Product, error) {
+	f.updateStatusCalled = true
+	f.updateStatusProductID = productID
+	f.updateStatusInput = input
 	if f.err != nil {
 		return nil, f.err
 	}

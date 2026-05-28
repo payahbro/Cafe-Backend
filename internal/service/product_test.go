@@ -453,6 +453,112 @@ func TestProductServiceUpdateProductRejectsDuplicateName(t *testing.T) {
 	}
 }
 
+func TestProductServiceUpdateProductStatusAllowsAdminUnavailableAndInvalidatesCache(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	txRepo := &fakeProductRepo{
+		product: productRow(t, productID, "Americano", createdAt),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	cache.txRunner = txRunner
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+
+	product, err := service.UpdateProductStatus(context.Background(), productID, UpdateProductStatusInput{
+		Status:    "unavailable",
+		ActorRole: string(repository.UserRoleADMIN),
+	})
+	if err != nil {
+		t.Fatalf("update product status: %v", err)
+	}
+
+	if !txRunner.called {
+		t.Fatalf("expected transaction runner to be called")
+	}
+	if !txRepo.updateStatusCalled {
+		t.Fatalf("expected update status to be called")
+	}
+	if txRepo.updateStatusArg.Status != repository.ProductStatusUnavailable {
+		t.Fatalf("status = %q", txRepo.updateStatusArg.Status)
+	}
+	if product.Status != "unavailable" {
+		t.Fatalf("product status = %q", product.Status)
+	}
+	if !cache.invalidated {
+		t.Fatalf("expected product list cache invalidation")
+	}
+	if cache.detailProductID != productID {
+		t.Fatalf("detail cache product id = %q", cache.detailProductID)
+	}
+	if cache.invalidatedBeforeTxDone {
+		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
+}
+
+func TestProductServiceUpdateProductStatusRejectsPegawaiUnavailable(t *testing.T) {
+	txRepo := &fakeProductRepo{}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, cache)
+
+	_, err := service.UpdateProductStatus(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductStatusInput{
+		Status:    "unavailable",
+		ActorRole: string(repository.UserRolePEGAWAI),
+	})
+	if !errors.Is(err, ErrProductStatusForbidden) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.updateStatusCalled {
+		t.Fatalf("update status should not be called")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated")
+	}
+}
+
+func TestProductServiceUpdateProductStatusAllowsPegawaiOutOfStock(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		product: productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+	}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	product, err := service.UpdateProductStatus(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductStatusInput{
+		Status:    "out_of_stock",
+		ActorRole: string(repository.UserRolePEGAWAI),
+	})
+	if err != nil {
+		t.Fatalf("update product status: %v", err)
+	}
+	if product.Status != "out_of_stock" {
+		t.Fatalf("product status = %q", product.Status)
+	}
+}
+
+func TestProductServiceUpdateProductStatusRejectsInvalidID(t *testing.T) {
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: &fakeProductRepo{}}, nil)
+
+	_, err := service.UpdateProductStatus(context.Background(), "not-a-uuid", UpdateProductStatusInput{
+		Status:    "available",
+		ActorRole: string(repository.UserRoleADMIN),
+	})
+	if !errors.Is(err, ErrInvalidProductID) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProductServiceUpdateProductStatusReturnsNotFound(t *testing.T) {
+	txRepo := &fakeProductRepo{err: pgx.ErrNoRows}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	_, err := service.UpdateProductStatus(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductStatusInput{
+		Status:    "available",
+		ActorRole: string(repository.UserRoleADMIN),
+	})
+	if !errors.Is(err, ErrProductNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 type fakeProductTxRunner struct {
 	repo   productRepository
 	called bool
@@ -531,18 +637,20 @@ func (f *fakeProductCacheInvalidator) InvalidateProductDetail(ctx context.Contex
 }
 
 type fakeProductRepo struct {
-	products     []repository.Product
-	product      repository.Product
-	nameProduct  repository.Product
-	err          error
-	getByNameErr error
-	listArg      repository.ListProductsParams
-	createArg    repository.CreateProductParams
-	updateArg    repository.UpdateProductParams
-	listCalled   bool
-	getCalled    bool
-	createCalled bool
-	updateCalled bool
+	products           []repository.Product
+	product            repository.Product
+	nameProduct        repository.Product
+	err                error
+	getByNameErr       error
+	listArg            repository.ListProductsParams
+	createArg          repository.CreateProductParams
+	updateArg          repository.UpdateProductParams
+	updateStatusArg    repository.UpdateProductStatusParams
+	listCalled         bool
+	getCalled          bool
+	createCalled       bool
+	updateCalled       bool
+	updateStatusCalled bool
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
@@ -598,6 +706,17 @@ func (f *fakeProductRepo) UpdateProduct(ctx context.Context, arg repository.Upda
 	product.Status = arg.Status
 	product.ImageUrl = arg.ImageUrl
 	product.Attributes = arg.Attributes
+	return product, nil
+}
+
+func (f *fakeProductRepo) UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error) {
+	f.updateStatusCalled = true
+	f.updateStatusArg = arg
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	product := f.product
+	product.Status = arg.Status
 	return product, nil
 }
 
