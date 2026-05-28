@@ -19,6 +19,7 @@ var (
 	ErrInvalidProductID         = errors.New("invalid product id")
 	ErrProductNotFound          = errors.New("product not found")
 	ErrProductNameAlreadyExists = errors.New("product name already exists")
+	ErrProductCacheMiss         = errors.New("product cache miss")
 )
 
 // Interface
@@ -35,6 +36,10 @@ type productTxRunner interface {
 }
 
 type ProductCacheInvalidator interface {
+	GetProductList(ctx context.Context, input ListProductsInput) (*ProductList, error)
+	SetProductList(ctx context.Context, input ListProductsInput, list ProductList) error
+	GetProductDetail(ctx context.Context, productID string) (*Product, error)
+	SetProductDetail(ctx context.Context, product Product) error
 	InvalidateProductLists(ctx context.Context) error
 	InvalidateProductDetail(ctx context.Context, productID string) error
 }
@@ -134,6 +139,13 @@ func (s *ProductService) ListProducts(ctx context.Context, input ListProductsInp
 	if offset < 0 {
 		offset = 0
 	}
+	normalizedInput := ListProductsInput{Limit: limit, Offset: offset}
+
+	if s.cache != nil {
+		if list, err := s.cache.GetProductList(ctx, normalizedInput); err == nil && list != nil {
+			return list, nil
+		}
+	}
 
 	rows, err := s.repo.ListProducts(ctx, repository.ListProductsParams{
 		Limit:  limit + 1,
@@ -153,12 +165,17 @@ func (s *ProductService) ListProducts(ctx context.Context, input ListProductsInp
 		items = append(items, productFromRow(row))
 	}
 
-	return &ProductList{
+	list := &ProductList{
 		Items:   items,
 		Limit:   limit,
 		HasNext: hasNext,
 		HasPrev: offset > 0,
-	}, nil
+	}
+	if s.cache != nil {
+		_ = s.cache.SetProductList(ctx, normalizedInput, *list)
+	}
+
+	return list, nil
 }
 
 func (s *ProductService) GetProduct(ctx context.Context, productID string) (*Product, error) {
@@ -170,6 +187,13 @@ func (s *ProductService) GetProduct(ctx context.Context, productID string) (*Pro
 	if err := id.Scan(productID); err != nil {
 		return nil, ErrInvalidProductID
 	}
+	normalizedProductID := id.String()
+
+	if s.cache != nil {
+		if product, err := s.cache.GetProductDetail(ctx, normalizedProductID); err == nil && product != nil {
+			return product, nil
+		}
+	}
 
 	row, err := s.repo.GetProductByID(ctx, id)
 	if err != nil {
@@ -180,6 +204,10 @@ func (s *ProductService) GetProduct(ctx context.Context, productID string) (*Pro
 	}
 
 	product := productFromRow(row)
+	if s.cache != nil {
+		_ = s.cache.SetProductDetail(ctx, product)
+	}
+
 	return &product, nil
 }
 

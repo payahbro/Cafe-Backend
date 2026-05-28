@@ -45,6 +45,79 @@ func TestProductServiceListProductsMapsRows(t *testing.T) {
 	}
 }
 
+func TestProductServiceListProductsReturnsCacheHit(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	repo := &fakeProductRepo{
+		products: []repository.Product{
+			productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt),
+		},
+	}
+	cache := &fakeProductCacheInvalidator{
+		list: &ProductList{
+			Items: []Product{
+				{
+					ID:        "11111111-1111-4111-8111-111111111111",
+					Name:      "Americano",
+					Price:     25000,
+					Category:  "coffee",
+					Status:    "available",
+					CreatedAt: createdAt,
+					UpdatedAt: createdAt,
+				},
+			},
+			Limit:   10,
+			HasNext: false,
+			HasPrev: false,
+		},
+	}
+	service := NewProductService(repo, nil, cache)
+
+	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 10})
+	if err != nil {
+		t.Fatalf("list products: %v", err)
+	}
+
+	if repo.listCalled {
+		t.Fatalf("repository should not be called on cache hit")
+	}
+	if list.Items[0].Name != "Americano" {
+		t.Fatalf("product name = %q", list.Items[0].Name)
+	}
+	if cache.listInput.Limit != 10 {
+		t.Fatalf("cache list limit = %d", cache.listInput.Limit)
+	}
+}
+
+func TestProductServiceListProductsCachesMissResult(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	repo := &fakeProductRepo{
+		products: []repository.Product{
+			productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+			productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt),
+		},
+	}
+	cache := &fakeProductCacheInvalidator{listErr: ErrProductCacheMiss}
+	service := NewProductService(repo, nil, cache)
+
+	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 1})
+	if err != nil {
+		t.Fatalf("list products: %v", err)
+	}
+
+	if !repo.listCalled {
+		t.Fatalf("expected repository to be called on cache miss")
+	}
+	if !cache.setListCalled {
+		t.Fatalf("expected list result to be cached")
+	}
+	if cache.setListInput.Limit != 1 {
+		t.Fatalf("cached list input limit = %d", cache.setListInput.Limit)
+	}
+	if !list.HasNext {
+		t.Fatalf("expected has_next true")
+	}
+}
+
 func TestProductServiceGetProductMapsRow(t *testing.T) {
 	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
 	repo := &fakeProductRepo{
@@ -65,6 +138,87 @@ func TestProductServiceGetProductMapsRow(t *testing.T) {
 	}
 	if string(product.Attributes) != `{"temperature":["hot","iced"]}` {
 		t.Fatalf("attributes = %s", product.Attributes)
+	}
+}
+
+func TestProductServiceGetProductReturnsCacheHit(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	repo := &fakeProductRepo{
+		product: productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt),
+	}
+	cache := &fakeProductCacheInvalidator{
+		product: &Product{
+			ID:        "11111111-1111-4111-8111-111111111111",
+			Name:      "Americano",
+			Price:     25000,
+			Category:  "coffee",
+			Status:    "available",
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		},
+	}
+	service := NewProductService(repo, nil, cache)
+
+	product, err := service.GetProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatalf("get product: %v", err)
+	}
+
+	if repo.getCalled {
+		t.Fatalf("repository should not be called on cache hit")
+	}
+	if product.Name != "Americano" {
+		t.Fatalf("product name = %q", product.Name)
+	}
+	if cache.detailProductID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("cache detail product id = %q", cache.detailProductID)
+	}
+}
+
+func TestProductServiceGetProductCachesMissResult(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	repo := &fakeProductRepo{
+		product: productRow(t, productID, "Americano", createdAt),
+	}
+	cache := &fakeProductCacheInvalidator{detailErr: ErrProductCacheMiss}
+	service := NewProductService(repo, nil, cache)
+
+	product, err := service.GetProduct(context.Background(), productID)
+	if err != nil {
+		t.Fatalf("get product: %v", err)
+	}
+
+	if !repo.getCalled {
+		t.Fatalf("expected repository to be called on cache miss")
+	}
+	if !cache.setDetailCalled {
+		t.Fatalf("expected detail result to be cached")
+	}
+	if product.Name != "Americano" {
+		t.Fatalf("product name = %q", product.Name)
+	}
+}
+
+func TestProductServiceGetProductFallsBackWhenCacheFails(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	repo := &fakeProductRepo{
+		product: productRow(t, productID, "Americano", createdAt),
+	}
+	cache := &fakeProductCacheInvalidator{detailErr: errors.New("redis unavailable")}
+	service := NewProductService(repo, nil, cache)
+
+	product, err := service.GetProduct(context.Background(), productID)
+	if err != nil {
+		t.Fatalf("get product: %v", err)
+	}
+
+	if !repo.getCalled {
+		t.Fatalf("expected repository to be called when cache fails")
+	}
+	if product.Name != "Americano" {
+		t.Fatalf("product name = %q", product.Name)
 	}
 }
 
@@ -321,8 +475,43 @@ type fakeProductCacheInvalidator struct {
 	txRunner                *fakeProductTxRunner
 	invalidated             bool
 	invalidatedBeforeTxDone bool
+	list                    *ProductList
+	product                 *Product
+	listInput               ListProductsInput
+	setListInput            ListProductsInput
 	detailProductID         string
+	listErr                 error
+	detailErr               error
+	setListCalled           bool
+	setDetailCalled         bool
 	err                     error
+}
+
+func (f *fakeProductCacheInvalidator) GetProductList(ctx context.Context, input ListProductsInput) (*ProductList, error) {
+	f.listInput = input
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.list, nil
+}
+
+func (f *fakeProductCacheInvalidator) SetProductList(ctx context.Context, input ListProductsInput, list ProductList) error {
+	f.setListCalled = true
+	f.setListInput = input
+	return f.err
+}
+
+func (f *fakeProductCacheInvalidator) GetProductDetail(ctx context.Context, productID string) (*Product, error) {
+	f.detailProductID = productID
+	if f.detailErr != nil {
+		return nil, f.detailErr
+	}
+	return f.product, nil
+}
+
+func (f *fakeProductCacheInvalidator) SetProductDetail(ctx context.Context, product Product) error {
+	f.setDetailCalled = true
+	return f.err
 }
 
 func (f *fakeProductCacheInvalidator) InvalidateProductLists(ctx context.Context) error {
@@ -350,12 +539,14 @@ type fakeProductRepo struct {
 	listArg      repository.ListProductsParams
 	createArg    repository.CreateProductParams
 	updateArg    repository.UpdateProductParams
+	listCalled   bool
 	getCalled    bool
 	createCalled bool
 	updateCalled bool
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
+	f.listCalled = true
 	f.listArg = arg
 	if f.err != nil {
 		return nil, f.err
