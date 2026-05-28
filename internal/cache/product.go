@@ -40,3 +40,10 @@ func (c *ProductCache) InvalidateProductLists(ctx context.Context) error {
 	}
 	return c.client.Del(ctx, keys...).Err()
 }
+
+func (c *ProductCache) InvalidateProductDetail(ctx context.Context, productID string) error {
+	if c == nil || c.client == nil {
+		return nil
+	}
+	return c.client.Del(ctx, "products:detail:"+productID).Err()
+}

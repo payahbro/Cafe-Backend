@@ -65,6 +65,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Products.GET("", productHandler.ListProducts)
 	v1Products.POST("", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), productHandler.CreateProduct)
 	v1Products.GET("/:id", productHandler.GetProduct)
+	v1Products.PUT("/:id", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), productHandler.UpdateProduct)
 
 	return r
 }

@@ -21,11 +21,13 @@ var (
 	ErrProductNameAlreadyExists = errors.New("product name already exists")
 )
 
+// Interface
 type productRepository interface {
 	ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (repository.Product, error)
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
+	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
 }
 
 type productTxRunner interface {
@@ -34,8 +36,26 @@ type productTxRunner interface {
 
 type ProductCacheInvalidator interface {
 	InvalidateProductLists(ctx context.Context) error
+	InvalidateProductDetail(ctx context.Context, productID string) error
 }
 
+// Representative table
+type Product struct {
+	ID          string
+	Name        string
+	Description *string
+	Price       int32
+	Category    string
+	Status      string
+	ImageURL    *string
+	Rating      float64
+	TotalSold   int32
+	Attributes  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Implementation
 type ProductTxRunner struct {
 	db   cafedb.TxBeginner
 	repo *repository.Queries
@@ -59,21 +79,6 @@ type ProductList struct {
 	HasPrev bool
 }
 
-type Product struct {
-	ID          string
-	Name        string
-	Description *string
-	Price       int32
-	Category    string
-	Status      string
-	ImageURL    *string
-	Rating      float64
-	TotalSold   int32
-	Attributes  []byte
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
 type CreateProductInput struct {
 	Name        string
 	Description *string
@@ -82,6 +87,16 @@ type CreateProductInput struct {
 	Status      string
 	ImageURL    string
 	Attributes  []byte
+}
+
+type UpdateProductInput struct {
+	Name        *string
+	Description *string
+	Price       *int32
+	Category    *string
+	Status      *string
+	ImageURL    *string
+	Attributes  *[]byte
 }
 
 func NewProductService(repo productRepository, txRunner productTxRunner, cache ProductCacheInvalidator) *ProductService {
@@ -222,6 +237,111 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 	return &product, nil
 }
 
+func (s *ProductService) UpdateProduct(ctx context.Context, productID string, input UpdateProductInput) (*Product, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("product transaction runner missing")
+	}
+
+	var id pgtype.UUID
+	if err := id.Scan(productID); err != nil {
+		return nil, ErrInvalidProductID
+	}
+	normalizedProductID := id.String()
+
+	var row repository.Product
+	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		existing, err := repo.GetProductByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			return fmt.Errorf("get product: %w", err)
+		}
+
+		name := existing.Name
+		if input.Name != nil {
+			name = strings.TrimSpace(*input.Name)
+			if !strings.EqualFold(name, existing.Name) {
+				found, err := repo.GetProductByNameCI(ctx, name)
+				if err == nil && found.ID.String() != normalizedProductID {
+					return ErrProductNameAlreadyExists
+				}
+				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return fmt.Errorf("check product name: %w", err)
+				}
+			}
+		}
+
+		description := existing.Description
+		if input.Description != nil {
+			description = optionalText(input.Description)
+		}
+
+		price := existing.Price
+		if input.Price != nil {
+			price = *input.Price
+		}
+
+		category := existing.Category
+		if input.Category != nil {
+			category = repository.ProductCategory(*input.Category)
+		}
+
+		status := existing.Status
+		if input.Status != nil {
+			status = repository.ProductStatus(*input.Status)
+		}
+
+		imageURL := existing.ImageUrl
+		if input.ImageURL != nil {
+			imageURL = pgtype.Text{String: *input.ImageURL, Valid: *input.ImageURL != ""}
+		}
+
+		attributes := existing.Attributes
+		if input.Attributes != nil {
+			attributes = *input.Attributes
+		}
+
+		updated, err := repo.UpdateProduct(ctx, repository.UpdateProductParams{
+			ID:          id,
+			Name:        name,
+			Description: description,
+			Price:       price,
+			Category:    category,
+			Status:      status,
+			ImageUrl:    imageURL,
+			Attributes:  attributes,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			if isUniqueViolation(err) {
+				return ErrProductNameAlreadyExists
+			}
+			return fmt.Errorf("update product: %w", err)
+		}
+
+		row = updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	product := productFromRow(row)
+	if s.cache != nil {
+		_ = s.cache.InvalidateProductLists(ctx)
+		_ = s.cache.InvalidateProductDetail(ctx, normalizedProductID)
+	}
+
+	return &product, nil
+}
+
+// helper
 func normalizeProductLimit(limit int32) int32 {
 	if limit <= 0 {
 		return 10

@@ -25,6 +25,7 @@ type productReader interface {
 	ListProducts(ctx context.Context, input service.ListProductsInput) (*service.ProductList, error)
 	GetProduct(ctx context.Context, productID string) (*service.Product, error)
 	CreateProduct(ctx context.Context, input service.CreateProductInput) (*service.Product, error)
+	UpdateProduct(ctx context.Context, productID string, input service.UpdateProductInput) (*service.Product, error)
 }
 
 type ProductListResponse struct {
@@ -78,6 +79,16 @@ type CreateProductRequest struct {
 	Status      string              `json:"status"`
 	ImageURL    string              `json:"image_url"`
 	Attributes  map[string][]string `json:"attributes"`
+}
+
+type UpdateProductRequest struct {
+	Name        *string              `json:"name"`
+	Description *string              `json:"description"`
+	Price       *int32               `json:"price"`
+	Category    *string              `json:"category"`
+	Status      *string              `json:"status"`
+	ImageURL    *string              `json:"image_url"`
+	Attributes  *map[string][]string `json:"attributes"`
 }
 
 func NewProductHandler(productService productReader, supabaseURL ...string) *ProductHandler {
@@ -204,6 +215,74 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 	dto.WriteSuccess(c, http.StatusCreated, productDetailResponse(*product), "Produk berhasil dibuat")
 }
 
+func (h *ProductHandler) UpdateProduct(c *gin.Context) {
+	if h.productService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Product service unavailable", nil)
+		return
+	}
+
+	productID := c.Param("id")
+	if !isValidUUID(productID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"id": "ID produk harus berupa UUID",
+		})
+		return
+	}
+
+	var req UpdateProductRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"body": "Payload tidak valid",
+		})
+		return
+	}
+
+	req = normalizeUpdateProductRequest(req)
+	if validationErrors := validateUpdateProductRequest(req, h.supabaseURL); len(validationErrors) > 0 {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", validationErrors)
+		return
+	}
+
+	var attributes *[]byte
+	if req.Attributes != nil {
+		rawAttributes, err := json.Marshal(*req.Attributes)
+		if err != nil {
+			dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+				"attributes": "Attributes tidak valid",
+			})
+			return
+		}
+		attributes = &rawAttributes
+	}
+
+	product, err := h.productService.UpdateProduct(c.Request.Context(), productID, service.UpdateProductInput{
+		Name:        req.Name,
+		Description: req.Description,
+		Price:       req.Price,
+		Category:    req.Category,
+		Status:      req.Status,
+		ImageURL:    req.ImageURL,
+		Attributes:  attributes,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrProductNotFound):
+			dto.WriteError(c, http.StatusNotFound, "PRODUCT_NOT_FOUND", "Produk tidak ditemukan", nil)
+		case errors.Is(err, service.ErrProductNameAlreadyExists):
+			dto.WriteError(c, http.StatusConflict, "PRODUCT_NAME_ALREADY_EXISTS", "Nama produk sudah digunakan", nil)
+		case errors.Is(err, service.ErrInvalidProductID):
+			dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+				"id": "ID produk harus berupa UUID",
+			})
+		default:
+			dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+		}
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, productDetailResponse(*product), "Produk berhasil diperbarui")
+}
+
 func parseProductLimit(raw string) (int32, bool) {
 	if raw == "" {
 		return 10, true
@@ -286,6 +365,30 @@ func normalizeCreateProductRequest(req CreateProductRequest) CreateProductReques
 	return req
 }
 
+func normalizeUpdateProductRequest(req UpdateProductRequest) UpdateProductRequest {
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		req.Name = &name
+	}
+	if req.Description != nil {
+		description := strings.TrimSpace(*req.Description)
+		req.Description = &description
+	}
+	if req.Category != nil {
+		category := strings.TrimSpace(*req.Category)
+		req.Category = &category
+	}
+	if req.Status != nil {
+		status := strings.TrimSpace(*req.Status)
+		req.Status = &status
+	}
+	if req.ImageURL != nil {
+		imageURL := strings.TrimSpace(*req.ImageURL)
+		req.ImageURL = &imageURL
+	}
+	return req
+}
+
 func validateCreateProductRequest(req CreateProductRequest, supabaseURL string) map[string]string {
 	errors := make(map[string]string)
 
@@ -317,6 +420,53 @@ func validateCreateProductRequest(req CreateProductRequest, supabaseURL string) 
 
 	for field, message := range validateProductAttributes(req.Category, req.Attributes) {
 		errors[field] = message
+	}
+
+	return errors
+}
+
+func validateUpdateProductRequest(req UpdateProductRequest, supabaseURL string) map[string]string {
+	errors := make(map[string]string)
+
+	if req.Name != nil {
+		if *req.Name == "" {
+			errors["name"] = "Nama produk wajib diisi"
+		} else if len(*req.Name) < 3 || len(*req.Name) > 100 {
+			errors["name"] = "Nama produk harus 3-100 karakter"
+		}
+	}
+
+	if req.Description != nil && len(*req.Description) > 500 {
+		errors["description"] = "Deskripsi maksimal 500 karakter"
+	}
+
+	if req.Price != nil && (*req.Price < 0 || *req.Price > 99999999) {
+		errors["price"] = "Harga harus 0-99999999"
+	}
+
+	if req.Category != nil && !isAllowedValue(*req.Category, []string{"coffee", "food", "snack"}) {
+		errors["category"] = "Kategori harus coffee, food, atau snack"
+	}
+
+	if req.Status != nil && !isAllowedValue(*req.Status, []string{"available", "out_of_stock", "unavailable"}) {
+		errors["status"] = "Status harus available, out_of_stock, atau unavailable"
+	}
+
+	if req.ImageURL != nil && !isSupabaseProductStorageURL(*req.ImageURL, supabaseURL) {
+		errors["image_url"] = "URL gambar harus berasal dari Supabase Storage project ini"
+	}
+
+	if req.Category != nil && req.Attributes == nil {
+		errors["attributes"] = "Attributes wajib dikirim saat category diubah"
+	}
+	if req.Attributes != nil {
+		if req.Category == nil {
+			errors["category"] = "Kategori wajib dikirim saat attributes diubah"
+		} else {
+			for field, message := range validateProductAttributes(*req.Category, *req.Attributes) {
+				errors[field] = message
+			}
+		}
 	}
 
 	return errors

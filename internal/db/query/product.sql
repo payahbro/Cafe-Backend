@@ -32,9 +32,22 @@ WHERE deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
+-- name: UpdateProduct :one
+UPDATE public.products
+SET
+    name = $2,
+    description = $3,
+    price = $4,
+    category = $5,
+    status = $6,
+    image_url = $7,
+    attributes = $8
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING *;
+
 -- name: UpdateProductStatus :one
 UPDATE public.products
 SET status = $2
 WHERE id = $1
 RETURNING *;
-

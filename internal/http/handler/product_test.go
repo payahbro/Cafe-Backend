@@ -319,15 +319,161 @@ func TestProductHandlerCreateProductReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestProductHandlerUpdateProductReturnsUpdated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	description := "Espresso dengan air panas"
+	fakeService := &fakeProductReader{
+		product: &service.Product{
+			ID:          "11111111-1111-4111-8111-111111111111",
+			Name:        "Americano",
+			Description: &description,
+			Price:       28000,
+			Category:    "coffee",
+			Status:      "available",
+			ImageURL:    stringPtr("https://example.supabase.co/storage/v1/object/public/products/americano.png"),
+			Rating:      4.5,
+			TotalSold:   120,
+			Attributes:  []byte(`{"temperature":["hot","iced"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+			CreatedAt:   time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+			UpdatedAt:   time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC),
+		},
+	}
+
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService, "https://example.supabase.co")
+	router.PUT("/products/:id", productHandler.UpdateProduct)
+
+	body := `{"price":28000}`
+	req := httptest.NewRequest(http.MethodPut, "/products/11111111-1111-4111-8111-111111111111", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateProductID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("product id = %q", fakeService.updateProductID)
+	}
+	if fakeService.updateInput.Price == nil || *fakeService.updateInput.Price != 28000 {
+		t.Fatalf("update price = %v", fakeService.updateInput.Price)
+	}
+	bodyText := resp.Body.String()
+	for _, want := range []string{
+		`"success":true`,
+		`"price":28000`,
+		`"message":"Produk berhasil diperbarui"`,
+	} {
+		if !strings.Contains(bodyText, want) {
+			t.Fatalf("response body missing %s: %s", want, bodyText)
+		}
+	}
+}
+
+func TestProductHandlerUpdateProductRejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PUT("/products/:id", productHandler.UpdateProduct)
+
+	req := httptest.NewRequest(http.MethodPut, "/products/not-a-uuid", strings.NewReader(`{"price":28000}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateCalled {
+		t.Fatalf("service should not be called for invalid uuid")
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"VALIDATION_ERROR"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductRejectsInvalidFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService, "https://example.supabase.co")
+	router.PUT("/products/:id", productHandler.UpdateProduct)
+
+	body := `{"name":"A","price":-1}`
+	req := httptest.NewRequest(http.MethodPut, "/products/11111111-1111-4111-8111-111111111111", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.updateCalled {
+		t.Fatalf("service should not be called for invalid fields")
+	}
+	if !strings.Contains(resp.Body.String(), `"name"`) || !strings.Contains(resp.Body.String(), `"price"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductNotFound}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PUT("/products/:id", productHandler.UpdateProduct)
+
+	req := httptest.NewRequest(http.MethodPut, "/products/11111111-1111-4111-8111-111111111111", strings.NewReader(`{"price":28000}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_NOT_FOUND"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerUpdateProductReturnsConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductNameAlreadyExists}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PUT("/products/:id", productHandler.UpdateProduct)
+
+	req := httptest.NewRequest(http.MethodPut, "/products/11111111-1111-4111-8111-111111111111", strings.NewReader(`{"name":"Cafe Latte"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_NAME_ALREADY_EXISTS"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
 type fakeProductReader struct {
-	list          *service.ProductList
-	product       *service.Product
-	err           error
-	listInput     service.ListProductsInput
-	createInput   service.CreateProductInput
-	productID     string
-	productCalled bool
-	createCalled  bool
+	list            *service.ProductList
+	product         *service.Product
+	err             error
+	listInput       service.ListProductsInput
+	createInput     service.CreateProductInput
+	updateInput     service.UpdateProductInput
+	productID       string
+	updateProductID string
+	productCalled   bool
+	createCalled    bool
+	updateCalled    bool
 }
 
 func (f *fakeProductReader) ListProducts(_ context.Context, input service.ListProductsInput) (*service.ProductList, error) {
@@ -353,6 +499,19 @@ func (f *fakeProductReader) GetProduct(_ context.Context, productID string) (*se
 func (f *fakeProductReader) CreateProduct(_ context.Context, input service.CreateProductInput) (*service.Product, error) {
 	f.createCalled = true
 	f.createInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.product == nil {
+		return nil, errors.New("missing product")
+	}
+	return f.product, nil
+}
+
+func (f *fakeProductReader) UpdateProduct(_ context.Context, productID string, input service.UpdateProductInput) (*service.Product, error) {
+	f.updateCalled = true
+	f.updateProductID = productID
+	f.updateInput = input
 	if f.err != nil {
 		return nil, f.err
 	}

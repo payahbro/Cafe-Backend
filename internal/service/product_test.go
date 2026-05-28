@@ -201,6 +201,104 @@ func TestProductServiceCreateProductIgnoresCacheInvalidationError(t *testing.T) 
 	}
 }
 
+func TestProductServiceUpdateProductMergesPartialFieldsInTransactionAndInvalidatesCache(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	existing := productRow(t, productID, "Americano", createdAt)
+	txRepo := &fakeProductRepo{
+		product:      existing,
+		getByNameErr: pgx.ErrNoRows,
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	cache.txRunner = txRunner
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+	price := int32(28000)
+
+	product, err := service.UpdateProduct(context.Background(), productID, UpdateProductInput{
+		Price: &price,
+	})
+	if err != nil {
+		t.Fatalf("update product: %v", err)
+	}
+
+	if !txRunner.called {
+		t.Fatalf("expected transaction runner to be called")
+	}
+	if !txRepo.updateCalled {
+		t.Fatalf("expected update to be called")
+	}
+	if txRepo.updateArg.Name != "Americano" {
+		t.Fatalf("update name = %q", txRepo.updateArg.Name)
+	}
+	if txRepo.updateArg.Price != 28000 {
+		t.Fatalf("update price = %d", txRepo.updateArg.Price)
+	}
+	if txRepo.updateArg.Category != repository.ProductCategoryCoffee {
+		t.Fatalf("update category = %q", txRepo.updateArg.Category)
+	}
+	if txRepo.updateArg.Status != repository.ProductStatusAvailable {
+		t.Fatalf("update status = %q", txRepo.updateArg.Status)
+	}
+	if product.Price != 28000 {
+		t.Fatalf("product price = %d", product.Price)
+	}
+	if !cache.invalidated {
+		t.Fatalf("expected product list cache invalidation")
+	}
+	if cache.detailProductID != productID {
+		t.Fatalf("detail cache product id = %q", cache.detailProductID)
+	}
+	if cache.invalidatedBeforeTxDone {
+		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
+}
+
+func TestProductServiceUpdateProductRejectsInvalidID(t *testing.T) {
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: &fakeProductRepo{}}, nil)
+	price := int32(28000)
+
+	_, err := service.UpdateProduct(context.Background(), "not-a-uuid", UpdateProductInput{Price: &price})
+	if !errors.Is(err, ErrInvalidProductID) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProductServiceUpdateProductReturnsNotFound(t *testing.T) {
+	txRepo := &fakeProductRepo{err: pgx.ErrNoRows}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+	price := int32(28000)
+
+	_, err := service.UpdateProduct(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductInput{Price: &price})
+	if !errors.Is(err, ErrProductNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProductServiceUpdateProductRejectsDuplicateName(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		product:     productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+		nameProduct: productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt),
+	}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, cache)
+	name := "Cafe Latte"
+
+	_, err := service.UpdateProduct(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductInput{
+		Name: &name,
+	})
+	if !errors.Is(err, ErrProductNameAlreadyExists) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.updateCalled {
+		t.Fatalf("update should not be called for duplicate name")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when update fails")
+	}
+}
+
 type fakeProductTxRunner struct {
 	repo   productRepository
 	called bool
@@ -223,6 +321,7 @@ type fakeProductCacheInvalidator struct {
 	txRunner                *fakeProductTxRunner
 	invalidated             bool
 	invalidatedBeforeTxDone bool
+	detailProductID         string
 	err                     error
 }
 
@@ -234,15 +333,26 @@ func (f *fakeProductCacheInvalidator) InvalidateProductLists(ctx context.Context
 	return f.err
 }
 
+func (f *fakeProductCacheInvalidator) InvalidateProductDetail(ctx context.Context, productID string) error {
+	f.detailProductID = productID
+	if f.txRunner != nil && !f.txRunner.done {
+		f.invalidatedBeforeTxDone = true
+	}
+	return f.err
+}
+
 type fakeProductRepo struct {
 	products     []repository.Product
 	product      repository.Product
+	nameProduct  repository.Product
 	err          error
 	getByNameErr error
 	listArg      repository.ListProductsParams
 	createArg    repository.CreateProductParams
+	updateArg    repository.UpdateProductParams
 	getCalled    bool
 	createCalled bool
+	updateCalled bool
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
@@ -268,6 +378,9 @@ func (f *fakeProductRepo) GetProductByNameCI(ctx context.Context, lower string) 
 	if f.err != nil {
 		return repository.Product{}, f.err
 	}
+	if f.nameProduct.ID.Valid {
+		return f.nameProduct, nil
+	}
 	return f.product, nil
 }
 
@@ -278,6 +391,23 @@ func (f *fakeProductRepo) CreateProduct(ctx context.Context, arg repository.Crea
 		return repository.Product{}, f.err
 	}
 	return f.product, nil
+}
+
+func (f *fakeProductRepo) UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error) {
+	f.updateCalled = true
+	f.updateArg = arg
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	product := f.product
+	product.Name = arg.Name
+	product.Description = arg.Description
+	product.Price = arg.Price
+	product.Category = arg.Category
+	product.Status = arg.Status
+	product.ImageUrl = arg.ImageUrl
+	product.Attributes = arg.Attributes
+	return product, nil
 }
 
 func productRow(t *testing.T, id, name string, createdAt time.Time) repository.Product {

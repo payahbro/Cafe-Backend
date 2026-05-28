@@ -175,6 +175,63 @@ func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]P
 	return items, nil
 }
 
+const updateProduct = `-- name: UpdateProduct :one
+UPDATE public.products
+SET
+    name = $2,
+    description = $3,
+    price = $4,
+    category = $5,
+    status = $6,
+    image_url = $7,
+    attributes = $8
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+type UpdateProductParams struct {
+	ID          pgtype.UUID     `json:"id"`
+	Name        string          `json:"name"`
+	Description pgtype.Text     `json:"description"`
+	Price       int32           `json:"price"`
+	Category    ProductCategory `json:"category"`
+	Status      ProductStatus   `json:"status"`
+	ImageUrl    pgtype.Text     `json:"image_url"`
+	Attributes  []byte          `json:"attributes"`
+}
+
+func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
+	row := q.db.QueryRow(ctx, updateProduct,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.Price,
+		arg.Category,
+		arg.Status,
+		arg.ImageUrl,
+		arg.Attributes,
+	)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const updateProductStatus = `-- name: UpdateProductStatus :one
 UPDATE public.products
 SET status = $2
