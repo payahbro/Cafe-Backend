@@ -664,6 +664,92 @@ func TestProductServiceDeleteProductReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestProductServiceRestoreProductRestoresDeletedProductInTransactionAndInvalidatesCache(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	deleted := productRow(t, productID, "Americano", createdAt)
+	deleted.Status = repository.ProductStatusUnavailable
+	deleted.DeletedAt = pgtype.Timestamptz{Time: createdAt, Valid: true}
+	txRepo := &fakeProductRepo{product: deleted}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	cache.txRunner = txRunner
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+
+	product, err := service.RestoreProduct(context.Background(), productID)
+	if err != nil {
+		t.Fatalf("restore product: %v", err)
+	}
+
+	if !txRunner.called {
+		t.Fatalf("expected transaction runner to be called")
+	}
+	if !txRepo.getIncludingDeletedCalled {
+		t.Fatalf("expected product lookup including deleted rows")
+	}
+	if !txRepo.restoreCalled {
+		t.Fatalf("expected restore to be called")
+	}
+	if txRepo.restoredID.String() != productID {
+		t.Fatalf("restored id = %q", txRepo.restoredID.String())
+	}
+	if product.Status != "available" {
+		t.Fatalf("product status = %q", product.Status)
+	}
+	if !cache.invalidated {
+		t.Fatalf("expected product list cache invalidation")
+	}
+	if cache.detailProductID != productID {
+		t.Fatalf("detail cache product id = %q", cache.detailProductID)
+	}
+	if cache.invalidatedBeforeTxDone {
+		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
+}
+
+func TestProductServiceRestoreProductRejectsActiveProduct(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		product: productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+	}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, cache)
+
+	_, err := service.RestoreProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if !errors.Is(err, ErrProductNotDeleted) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.restoreCalled {
+		t.Fatalf("restore should not be called for active product")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when restore fails")
+	}
+}
+
+func TestProductServiceRestoreProductRejectsInvalidID(t *testing.T) {
+	txRepo := &fakeProductRepo{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	_, err := service.RestoreProduct(context.Background(), "not-a-uuid")
+	if !errors.Is(err, ErrInvalidProductID) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.restoreCalled {
+		t.Fatalf("restore should not be called for invalid uuid")
+	}
+}
+
+func TestProductServiceRestoreProductReturnsNotFound(t *testing.T) {
+	txRepo := &fakeProductRepo{err: pgx.ErrNoRows}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	_, err := service.RestoreProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if !errors.Is(err, ErrProductNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 type fakeProductTxRunner struct {
 	repo   productRepository
 	called bool
@@ -752,6 +838,7 @@ type fakeProductRepo struct {
 	updateArg                 repository.UpdateProductParams
 	updateStatusArg           repository.UpdateProductStatusParams
 	deletedID                 pgtype.UUID
+	restoredID                pgtype.UUID
 	listCalled                bool
 	getCalled                 bool
 	getIncludingDeletedCalled bool
@@ -759,6 +846,7 @@ type fakeProductRepo struct {
 	updateCalled              bool
 	updateStatusCalled        bool
 	deleteCalled              bool
+	restoreCalled             bool
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
@@ -845,6 +933,18 @@ func (f *fakeProductRepo) SoftDeleteProduct(ctx context.Context, id pgtype.UUID)
 	product := f.product
 	product.Status = repository.ProductStatusUnavailable
 	product.DeletedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	return product, nil
+}
+
+func (f *fakeProductRepo) RestoreProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
+	f.restoreCalled = true
+	f.restoredID = id
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	product := f.product
+	product.Status = repository.ProductStatusAvailable
+	product.DeletedAt = pgtype.Timestamptz{}
 	return product, nil
 }
 

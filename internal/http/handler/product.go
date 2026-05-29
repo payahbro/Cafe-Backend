@@ -29,6 +29,7 @@ type productReader interface {
 	UpdateProduct(ctx context.Context, productID string, input service.UpdateProductInput) (*service.Product, error)
 	UpdateProductStatus(ctx context.Context, productID string, input service.UpdateProductStatusInput) (*service.Product, error)
 	DeleteProduct(ctx context.Context, productID string) error
+	RestoreProduct(ctx context.Context, productID string) (*service.Product, error)
 }
 
 type ProductListResponse struct {
@@ -382,6 +383,40 @@ func (h *ProductHandler) DeleteProduct(c *gin.Context) {
 	}
 
 	dto.WriteSuccess(c, http.StatusOK, nil, "Produk berhasil dihapus")
+}
+
+func (h *ProductHandler) RestoreProduct(c *gin.Context) {
+	if h.productService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Product service unavailable", nil)
+		return
+	}
+
+	productID := c.Param("id")
+	if !isValidUUID(productID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"id": "ID produk harus berupa UUID",
+		})
+		return
+	}
+
+	product, err := h.productService.RestoreProduct(c.Request.Context(), productID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrProductNotFound):
+			dto.WriteError(c, http.StatusNotFound, "PRODUCT_NOT_FOUND", "Produk tidak ditemukan", nil)
+		case errors.Is(err, service.ErrProductNotDeleted):
+			dto.WriteError(c, http.StatusConflict, "PRODUCT_NOT_DELETED", "Produk belum dihapus", nil)
+		case errors.Is(err, service.ErrInvalidProductID):
+			dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+				"id": "ID produk harus berupa UUID",
+			})
+		default:
+			dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+		}
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, productDetailResponse(*product), "Produk berhasil dipulihkan")
 }
 
 func parseProductLimit(raw string) (int32, bool) {

@@ -187,6 +187,38 @@ func (q *Queries) SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (Produc
 	return i, err
 }
 
+const restoreProduct = `-- name: RestoreProduct :one
+UPDATE public.products
+SET
+    status = 'available',
+    deleted_at = NULL
+WHERE id = $1
+  AND deleted_at IS NOT NULL
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+func (q *Queries) RestoreProduct(ctx context.Context, id pgtype.UUID) (Product, error) {
+	row := q.db.QueryRow(ctx, restoreProduct, id)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const listProducts = `-- name: ListProducts :many
 SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
 FROM public.products

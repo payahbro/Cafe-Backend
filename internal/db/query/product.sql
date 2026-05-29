@@ -66,3 +66,12 @@ SET
 WHERE id = $1
   AND deleted_at IS NULL
 RETURNING *;
+
+-- name: RestoreProduct :one
+UPDATE public.products
+SET
+    status = 'available',
+    deleted_at = NULL
+WHERE id = $1
+  AND deleted_at IS NOT NULL
+RETURNING *;

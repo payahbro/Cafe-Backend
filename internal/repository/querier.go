@@ -37,6 +37,7 @@ type Querier interface {
 	MarkOutboxRetry(ctx context.Context, arg MarkOutboxRetryParams) error
 	MarkOutboxSent(ctx context.Context, id pgtype.UUID) error
 	MarkPaymentRefunded(ctx context.Context, arg MarkPaymentRefundedParams) (Payment, error)
+	RestoreProduct(ctx context.Context, id pgtype.UUID) (Product, error)
 	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (Product, error)
 	TouchCart(ctx context.Context, id pgtype.UUID) error
 	UpdateCartItemQuantity(ctx context.Context, arg UpdateCartItemQuantityParams) (CartItem, error)

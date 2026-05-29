@@ -22,6 +22,7 @@ var (
 	ErrProductCacheMiss         = errors.New("product cache miss")
 	ErrProductStatusForbidden   = errors.New("product status forbidden")
 	ErrProductAlreadyDeleted    = errors.New("product already deleted")
+	ErrProductNotDeleted        = errors.New("product not deleted")
 )
 
 // Interface
@@ -34,6 +35,7 @@ type productRepository interface {
 	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
 	UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error)
 	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error)
+	RestoreProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 }
 
 type productTxRunner interface {
@@ -481,6 +483,57 @@ func (s *ProductService) DeleteProduct(ctx context.Context, productID string) er
 	}
 
 	return nil
+}
+
+func (s *ProductService) RestoreProduct(ctx context.Context, productID string) (*Product, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("product transaction runner missing")
+	}
+
+	var id pgtype.UUID
+	if err := id.Scan(productID); err != nil {
+		return nil, ErrInvalidProductID
+	}
+	normalizedProductID := id.String()
+
+	var row repository.Product
+	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		existing, err := repo.GetProductByIDIncludingDeleted(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			return fmt.Errorf("get product: %w", err)
+		}
+		if !existing.DeletedAt.Valid {
+			return ErrProductNotDeleted
+		}
+
+		restored, err := repo.RestoreProduct(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotDeleted
+			}
+			return fmt.Errorf("restore product: %w", err)
+		}
+
+		row = restored
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	product := productFromRow(row)
+	if s.cache != nil {
+		_ = s.cache.InvalidateProductLists(ctx)
+		_ = s.cache.InvalidateProductDetail(ctx, normalizedProductID)
+	}
+
+	return &product, nil
 }
 
 // helper
