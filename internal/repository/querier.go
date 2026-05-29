@@ -25,6 +25,7 @@ type Querier interface {
 	GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
+	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (Product, error)
 	GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdRow, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
@@ -36,6 +37,7 @@ type Querier interface {
 	MarkOutboxRetry(ctx context.Context, arg MarkOutboxRetryParams) error
 	MarkOutboxSent(ctx context.Context, id pgtype.UUID) error
 	MarkPaymentRefunded(ctx context.Context, arg MarkPaymentRefundedParams) (Payment, error)
+	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (Product, error)
 	TouchCart(ctx context.Context, id pgtype.UUID) error
 	UpdateCartItemQuantity(ctx context.Context, arg UpdateCartItemQuantityParams) (CartItem, error)
 	UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) (Order, error)

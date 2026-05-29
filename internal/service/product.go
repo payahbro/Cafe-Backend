@@ -21,16 +21,19 @@ var (
 	ErrProductNameAlreadyExists = errors.New("product name already exists")
 	ErrProductCacheMiss         = errors.New("product cache miss")
 	ErrProductStatusForbidden   = errors.New("product status forbidden")
+	ErrProductAlreadyDeleted    = errors.New("product already deleted")
 )
 
 // Interface
 type productRepository interface {
 	ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (repository.Product, error)
+	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (repository.Product, error)
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
 	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
 	UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error)
+	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 }
 
 type productTxRunner interface {
@@ -395,6 +398,17 @@ func (s *ProductService) UpdateProductStatus(ctx context.Context, productID stri
 
 	var row repository.Product
 	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		existing, err := repo.GetProductByIDIncludingDeleted(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			return fmt.Errorf("get product: %w", err)
+		}
+		if existing.DeletedAt.Valid {
+			return ErrProductAlreadyDeleted
+		}
+
 		updated, err := repo.UpdateProductStatus(ctx, repository.UpdateProductStatusParams{
 			ID:     id,
 			Status: repository.ProductStatus(input.Status),
@@ -420,6 +434,53 @@ func (s *ProductService) UpdateProductStatus(ctx context.Context, productID stri
 	}
 
 	return &product, nil
+}
+
+func (s *ProductService) DeleteProduct(ctx context.Context, productID string) error {
+	if s.repo == nil {
+		return errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return errors.New("product transaction runner missing")
+	}
+
+	var id pgtype.UUID
+	if err := id.Scan(productID); err != nil {
+		return ErrInvalidProductID
+	}
+	normalizedProductID := id.String()
+
+	err := s.txRunner.Run(ctx, func(repo productRepository) error {
+		existing, err := repo.GetProductByIDIncludingDeleted(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductNotFound
+			}
+			return fmt.Errorf("get product: %w", err)
+		}
+		if existing.DeletedAt.Valid {
+			return ErrProductAlreadyDeleted
+		}
+
+		if _, err := repo.SoftDeleteProduct(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrProductAlreadyDeleted
+			}
+			return fmt.Errorf("soft delete product: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if s.cache != nil {
+		_ = s.cache.InvalidateProductLists(ctx)
+		_ = s.cache.InvalidateProductDetail(ctx, normalizedProductID)
+	}
+
+	return nil
 }
 
 // helper

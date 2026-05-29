@@ -603,6 +603,116 @@ func TestProductHandlerUpdateProductStatusReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestProductHandlerUpdateProductStatusReturnsAlreadyDeletedConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductAlreadyDeleted}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.PATCH("/products/:id/status", func(c *gin.Context) {
+		c.Set("authenticated_user", middleware.AuthenticatedUser{Role: repository.UserRoleADMIN})
+		c.Next()
+	}, productHandler.UpdateProductStatus)
+
+	req := httptest.NewRequest(http.MethodPatch, "/products/11111111-1111-4111-8111-111111111111/status", strings.NewReader(`{"status":"available"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_ALREADY_DELETED"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerDeleteProductReturnsDeleted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.DELETE("/products/:id", productHandler.DeleteProduct)
+
+	req := httptest.NewRequest(http.MethodDelete, "/products/11111111-1111-4111-8111-111111111111", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.deleteProductID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("product id = %q", fakeService.deleteProductID)
+	}
+	if !strings.Contains(resp.Body.String(), `"message":"Produk berhasil dihapus"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerDeleteProductRejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.DELETE("/products/:id", productHandler.DeleteProduct)
+
+	req := httptest.NewRequest(http.MethodDelete, "/products/not-a-uuid", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.deleteCalled {
+		t.Fatalf("service should not be called for invalid uuid")
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"VALIDATION_ERROR"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerDeleteProductReturnsAlreadyDeletedConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductAlreadyDeleted}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.DELETE("/products/:id", productHandler.DeleteProduct)
+
+	req := httptest.NewRequest(http.MethodDelete, "/products/11111111-1111-4111-8111-111111111111", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_ALREADY_DELETED"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerDeleteProductReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{err: service.ErrProductNotFound}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.DELETE("/products/:id", productHandler.DeleteProduct)
+
+	req := httptest.NewRequest(http.MethodDelete, "/products/11111111-1111-4111-8111-111111111111", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"PRODUCT_NOT_FOUND"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
 type fakeProductReader struct {
 	list                  *service.ProductList
 	product               *service.Product
@@ -614,10 +724,12 @@ type fakeProductReader struct {
 	productID             string
 	updateProductID       string
 	updateStatusProductID string
+	deleteProductID       string
 	productCalled         bool
 	createCalled          bool
 	updateCalled          bool
 	updateStatusCalled    bool
+	deleteCalled          bool
 }
 
 func (f *fakeProductReader) ListProducts(_ context.Context, input service.ListProductsInput) (*service.ProductList, error) {
@@ -676,6 +788,12 @@ func (f *fakeProductReader) UpdateProductStatus(_ context.Context, productID str
 		return nil, errors.New("missing product")
 	}
 	return f.product, nil
+}
+
+func (f *fakeProductReader) DeleteProduct(_ context.Context, productID string) error {
+	f.deleteCalled = true
+	f.deleteProductID = productID
+	return f.err
 }
 
 func stringPtr(value string) *string {

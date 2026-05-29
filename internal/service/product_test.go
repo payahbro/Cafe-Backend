@@ -559,6 +559,111 @@ func TestProductServiceUpdateProductStatusReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestProductServiceUpdateProductStatusRejectsAlreadyDeletedProduct(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	deleted := productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt)
+	deleted.DeletedAt = pgtype.Timestamptz{Time: createdAt, Valid: true}
+	txRepo := &fakeProductRepo{product: deleted}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, cache)
+
+	_, err := service.UpdateProductStatus(context.Background(), "11111111-1111-4111-8111-111111111111", UpdateProductStatusInput{
+		Status:    "available",
+		ActorRole: string(repository.UserRoleADMIN),
+	})
+	if !errors.Is(err, ErrProductAlreadyDeleted) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.updateStatusCalled {
+		t.Fatalf("update status should not be called for already deleted product")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when update status fails")
+	}
+}
+
+func TestProductServiceDeleteProductSoftDeletesInTransactionAndInvalidatesCache(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	productID := "11111111-1111-4111-8111-111111111111"
+	txRepo := &fakeProductRepo{
+		product: productRow(t, productID, "Americano", createdAt),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	cache.txRunner = txRunner
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+
+	err := service.DeleteProduct(context.Background(), productID)
+	if err != nil {
+		t.Fatalf("delete product: %v", err)
+	}
+
+	if !txRunner.called {
+		t.Fatalf("expected transaction runner to be called")
+	}
+	if !txRepo.getIncludingDeletedCalled {
+		t.Fatalf("expected product lookup including deleted rows")
+	}
+	if !txRepo.deleteCalled {
+		t.Fatalf("expected soft delete to be called")
+	}
+	if txRepo.deletedID.String() != productID {
+		t.Fatalf("deleted id = %q", txRepo.deletedID.String())
+	}
+	if !cache.invalidated {
+		t.Fatalf("expected product list cache invalidation")
+	}
+	if cache.detailProductID != productID {
+		t.Fatalf("detail cache product id = %q", cache.detailProductID)
+	}
+	if cache.invalidatedBeforeTxDone {
+		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
+}
+
+func TestProductServiceDeleteProductRejectsAlreadyDeletedProduct(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	deleted := productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt)
+	deleted.DeletedAt = pgtype.Timestamptz{Time: createdAt, Valid: true}
+	txRepo := &fakeProductRepo{product: deleted}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, cache)
+
+	err := service.DeleteProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if !errors.Is(err, ErrProductAlreadyDeleted) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.deleteCalled {
+		t.Fatalf("soft delete should not be called for already deleted product")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when delete fails")
+	}
+}
+
+func TestProductServiceDeleteProductRejectsInvalidID(t *testing.T) {
+	txRepo := &fakeProductRepo{}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	err := service.DeleteProduct(context.Background(), "not-a-uuid")
+	if !errors.Is(err, ErrInvalidProductID) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.deleteCalled {
+		t.Fatalf("soft delete should not be called for invalid uuid")
+	}
+}
+
+func TestProductServiceDeleteProductReturnsNotFound(t *testing.T) {
+	txRepo := &fakeProductRepo{err: pgx.ErrNoRows}
+	service := NewProductService(&fakeProductRepo{}, &fakeProductTxRunner{repo: txRepo}, nil)
+
+	err := service.DeleteProduct(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if !errors.Is(err, ErrProductNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 type fakeProductTxRunner struct {
 	repo   productRepository
 	called bool
@@ -637,20 +742,23 @@ func (f *fakeProductCacheInvalidator) InvalidateProductDetail(ctx context.Contex
 }
 
 type fakeProductRepo struct {
-	products           []repository.Product
-	product            repository.Product
-	nameProduct        repository.Product
-	err                error
-	getByNameErr       error
-	listArg            repository.ListProductsParams
-	createArg          repository.CreateProductParams
-	updateArg          repository.UpdateProductParams
-	updateStatusArg    repository.UpdateProductStatusParams
-	listCalled         bool
-	getCalled          bool
-	createCalled       bool
-	updateCalled       bool
-	updateStatusCalled bool
+	products                  []repository.Product
+	product                   repository.Product
+	nameProduct               repository.Product
+	err                       error
+	getByNameErr              error
+	listArg                   repository.ListProductsParams
+	createArg                 repository.CreateProductParams
+	updateArg                 repository.UpdateProductParams
+	updateStatusArg           repository.UpdateProductStatusParams
+	deletedID                 pgtype.UUID
+	listCalled                bool
+	getCalled                 bool
+	getIncludingDeletedCalled bool
+	createCalled              bool
+	updateCalled              bool
+	updateStatusCalled        bool
+	deleteCalled              bool
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
@@ -664,6 +772,14 @@ func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListP
 
 func (f *fakeProductRepo) GetProductByID(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
 	f.getCalled = true
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	return f.product, nil
+}
+
+func (f *fakeProductRepo) GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
+	f.getIncludingDeletedCalled = true
 	if f.err != nil {
 		return repository.Product{}, f.err
 	}
@@ -717,6 +833,18 @@ func (f *fakeProductRepo) UpdateProductStatus(ctx context.Context, arg repositor
 	}
 	product := f.product
 	product.Status = arg.Status
+	return product, nil
+}
+
+func (f *fakeProductRepo) SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
+	f.deleteCalled = true
+	f.deletedID = id
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	product := f.product
+	product.Status = repository.ProductStatusUnavailable
+	product.DeletedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	return product, nil
 }
 

@@ -98,6 +98,34 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Product, 
 	return i, err
 }
 
+const getProductByIDIncludingDeleted = `-- name: GetProductByIDIncludingDeleted :one
+SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+FROM public.products
+WHERE id = $1
+`
+
+func (q *Queries) GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error) {
+	row := q.db.QueryRow(ctx, getProductByIDIncludingDeleted, id)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getProductByNameCI = `-- name: GetProductByNameCI :one
 SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
 FROM public.products
@@ -107,6 +135,38 @@ WHERE LOWER(name) = LOWER($1)
 
 func (q *Queries) GetProductByNameCI(ctx context.Context, lower string) (Product, error) {
 	row := q.db.QueryRow(ctx, getProductByNameCI, lower)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const softDeleteProduct = `-- name: SoftDeleteProduct :one
+UPDATE public.products
+SET
+    status = 'unavailable',
+    deleted_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+func (q *Queries) SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (Product, error) {
+	row := q.db.QueryRow(ctx, softDeleteProduct, id)
 	var i Product
 	err := row.Scan(
 		&i.ID,
@@ -236,6 +296,7 @@ const updateProductStatus = `-- name: UpdateProductStatus :one
 UPDATE public.products
 SET status = $2
 WHERE id = $1
+  AND deleted_at IS NULL
 RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
 `
 

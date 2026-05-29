@@ -95,15 +95,4 @@ INSERT INTO public.products (
     4.30,
     140
 )
-ON CONFLICT ((LOWER(name))) DO UPDATE
-SET
-    description = EXCLUDED.description,
-    price = EXCLUDED.price,
-    category = EXCLUDED.category,
-    status = EXCLUDED.status,
-    image_url = EXCLUDED.image_url,
-    attributes = EXCLUDED.attributes,
-    stock = EXCLUDED.stock,
-    rating = EXCLUDED.rating,
-    total_sold = EXCLUDED.total_sold,
-    deleted_at = NULL;
+ON CONFLICT ((LOWER(name))) DO NOTHING;

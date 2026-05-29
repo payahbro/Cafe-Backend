@@ -19,6 +19,11 @@ FROM public.products
 WHERE id = $1
   AND deleted_at IS NULL;
 
+-- name: GetProductByIDIncludingDeleted :one
+SELECT *
+FROM public.products
+WHERE id = $1;
+
 -- name: GetProductByNameCI :one
 SELECT *
 FROM public.products
@@ -50,4 +55,14 @@ RETURNING *;
 UPDATE public.products
 SET status = $2
 WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SoftDeleteProduct :one
+UPDATE public.products
+SET
+    status = 'unavailable',
+    deleted_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
 RETURNING *;
