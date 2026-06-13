@@ -118,6 +118,35 @@ func TestProductServiceListProductsCachesMissResult(t *testing.T) {
 	}
 }
 
+func TestProductServiceListProductsPassesIncludeDeletedToRepositoryAndCache(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	repo := &fakeProductRepo{
+		products: []repository.Product{
+			productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+		},
+	}
+	cache := &fakeProductCacheInvalidator{listErr: ErrProductCacheMiss}
+	service := NewProductService(repo, nil, cache)
+
+	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 10, IncludeDeleted: true})
+	if err != nil {
+		t.Fatalf("list products: %v", err)
+	}
+
+	if len(list.Items) != 1 {
+		t.Fatalf("items len = %d", len(list.Items))
+	}
+	if !repo.listArg.IncludeDeleted {
+		t.Fatalf("expected repository include deleted flag")
+	}
+	if !cache.listInput.IncludeDeleted {
+		t.Fatalf("expected cache lookup include deleted flag")
+	}
+	if !cache.setListInput.IncludeDeleted {
+		t.Fatalf("expected cached result include deleted flag")
+	}
+}
+
 func TestProductServiceGetProductMapsRow(t *testing.T) {
 	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
 	repo := &fakeProductRepo{

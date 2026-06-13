@@ -80,8 +80,9 @@ type ProductService struct {
 }
 
 type ListProductsInput struct {
-	Limit  int32
-	Offset int32
+	Limit          int32
+	Offset         int32
+	IncludeDeleted bool
 }
 
 type ProductList struct {
@@ -151,7 +152,7 @@ func (s *ProductService) ListProducts(ctx context.Context, input ListProductsInp
 	if offset < 0 {
 		offset = 0
 	}
-	normalizedInput := ListProductsInput{Limit: limit, Offset: offset}
+	normalizedInput := ListProductsInput{Limit: limit, Offset: offset, IncludeDeleted: input.IncludeDeleted}
 
 	if s.cache != nil {
 		if list, err := s.cache.GetProductList(ctx, normalizedInput); err == nil && list != nil {
@@ -160,8 +161,9 @@ func (s *ProductService) ListProducts(ctx context.Context, input ListProductsInp
 	}
 
 	rows, err := s.repo.ListProducts(ctx, repository.ListProductsParams{
-		Limit:  limit + 1,
-		Offset: offset,
+		Limit:          limit + 1,
+		Offset:         offset,
+		IncludeDeleted: input.IncludeDeleted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list products: %w", err)

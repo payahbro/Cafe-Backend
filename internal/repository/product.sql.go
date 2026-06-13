@@ -222,18 +222,19 @@ func (q *Queries) RestoreProduct(ctx context.Context, id pgtype.UUID) (Product, 
 const listProducts = `-- name: ListProducts :many
 SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
 FROM public.products
-WHERE deleted_at IS NULL
+WHERE ($3::boolean OR deleted_at IS NULL)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type ListProductsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit          int32 `json:"limit"`
+	Offset         int32 `json:"offset"`
+	IncludeDeleted bool  `json:"include_deleted"`
 }
 
 func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error) {
-	rows, err := q.db.Query(ctx, listProducts, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listProducts, arg.Limit, arg.Offset, arg.IncludeDeleted)
 	if err != nil {
 		return nil, err
 	}

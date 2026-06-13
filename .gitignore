@@ -8,6 +8,7 @@ bin/
 *.exe
 *.test
 *.log
+.gocache/
 
 # IDE/system
 .idea/

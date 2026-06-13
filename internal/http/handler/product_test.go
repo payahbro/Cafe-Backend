@@ -95,6 +95,28 @@ func TestProductHandlerListProductsClampsLimit(t *testing.T) {
 	}
 }
 
+func TestProductHandlerListProductsPassesIncludeDeleted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{
+		list: &service.ProductList{Limit: 10},
+	}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.GET("/products", productHandler.ListProducts)
+
+	req := httptest.NewRequest(http.MethodGet, "/products?include_deleted=true", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !fakeService.listInput.IncludeDeleted {
+		t.Fatalf("expected include deleted to be passed to service")
+	}
+}
+
 func TestProductHandlerGetProductReturnsProduct(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

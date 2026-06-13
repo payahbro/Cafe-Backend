@@ -121,7 +121,18 @@ func (h *ProductHandler) ListProducts(c *gin.Context) {
 		return
 	}
 
-	list, err := h.productService.ListProducts(c.Request.Context(), service.ListProductsInput{Limit: limit})
+	includeDeleted, ok := parseProductIncludeDeleted(c.Query("include_deleted"))
+	if !ok {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"include_deleted": "Include deleted harus berupa boolean",
+		})
+		return
+	}
+
+	list, err := h.productService.ListProducts(c.Request.Context(), service.ListProductsInput{
+		Limit:          limit,
+		IncludeDeleted: includeDeleted,
+	})
 	if err != nil {
 		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
 		return
@@ -435,6 +446,18 @@ func parseProductLimit(raw string) (int32, bool) {
 		return 50, true
 	}
 	return int32(value), true
+}
+
+func parseProductIncludeDeleted(raw string) (bool, bool) {
+	if raw == "" {
+		return false, true
+	}
+
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, false
+	}
+	return value, true
 }
 
 func productListResponses(products []service.Product) []ProductListResponse {

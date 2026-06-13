@@ -122,7 +122,7 @@ func (c *ProductCache) InvalidateProductDetail(ctx context.Context, productID st
 }
 
 func productListCacheKey(input service.ListProductsInput) string {
-	raw := fmt.Sprintf("limit=%d:offset=%d", input.Limit, input.Offset)
+	raw := fmt.Sprintf("limit=%d:offset=%d:include_deleted=%t", input.Limit, input.Offset, input.IncludeDeleted)
 	hash := sha256.Sum256([]byte(raw))
 	return "products:list:" + hex.EncodeToString(hash[:])
 }
