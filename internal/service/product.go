@@ -65,6 +65,7 @@ type Product struct {
 	Attributes  []byte
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	DeletedAt   *time.Time
 }
 
 // Implementation
@@ -563,7 +564,16 @@ func productFromRow(row repository.Product) Product {
 		Attributes:  row.Attributes,
 		CreatedAt:   row.CreatedAt.Time,
 		UpdatedAt:   row.UpdatedAt.Time,
+		DeletedAt:   timestamptzPtr(row.DeletedAt),
 	}
+}
+
+func timestamptzPtr(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Time
+	return &result
 }
 
 func numericFloat64(value pgtype.Numeric) float64 {

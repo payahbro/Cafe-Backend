@@ -15,23 +15,27 @@ import (
 
 func TestProductServiceListProductsMapsRows(t *testing.T) {
 	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	deletedAt := time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC)
+	deleted := productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt)
+	deleted.DeletedAt = pgtype.Timestamptz{Time: deletedAt, Valid: true}
 	repo := &fakeProductRepo{
 		products: []repository.Product{
 			productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
-			productRow(t, "22222222-2222-4222-8222-222222222222", "Cafe Latte", createdAt),
+			deleted,
+			productRow(t, "33333333-3333-4333-8333-333333333333", "Mocha", createdAt),
 		},
 	}
 
 	service := NewProductService(repo, nil, nil)
-	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 1})
+	list, err := service.ListProducts(context.Background(), ListProductsInput{Limit: 2})
 	if err != nil {
 		t.Fatalf("list products: %v", err)
 	}
 
-	if repo.listArg.Limit != 2 {
+	if repo.listArg.Limit != 3 {
 		t.Fatalf("repo limit = %d", repo.listArg.Limit)
 	}
-	if len(list.Items) != 1 {
+	if len(list.Items) != 2 {
 		t.Fatalf("items len = %d", len(list.Items))
 	}
 	if !list.HasNext {
@@ -42,6 +46,9 @@ func TestProductServiceListProductsMapsRows(t *testing.T) {
 	}
 	if list.Items[0].Rating != 4.5 {
 		t.Fatalf("rating = %v", list.Items[0].Rating)
+	}
+	if list.Items[1].DeletedAt == nil || !list.Items[1].DeletedAt.Equal(deletedAt) {
+		t.Fatalf("deleted_at = %v", list.Items[1].DeletedAt)
 	}
 }
 

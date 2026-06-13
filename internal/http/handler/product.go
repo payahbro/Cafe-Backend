@@ -44,6 +44,7 @@ type ProductListResponse struct {
 	Attributes json.RawMessage `json:"attributes"`
 	CreatedAt  interface{}     `json:"created_at"`
 	UpdatedAt  interface{}     `json:"updated_at"`
+	DeletedAt  interface{}     `json:"deleted_at"`
 }
 
 type ProductDetailResponse struct {
@@ -59,6 +60,7 @@ type ProductDetailResponse struct {
 	Attributes  json.RawMessage `json:"attributes"`
 	CreatedAt   interface{}     `json:"created_at"`
 	UpdatedAt   interface{}     `json:"updated_at"`
+	DeletedAt   interface{}     `json:"deleted_at"`
 }
 
 type productListEnvelope struct {
@@ -475,6 +477,7 @@ func productListResponses(products []service.Product) []ProductListResponse {
 			Attributes: jsonAttributes(product.Attributes),
 			CreatedAt:  product.CreatedAt,
 			UpdatedAt:  product.UpdatedAt,
+			DeletedAt:  product.DeletedAt,
 		})
 	}
 	return responses
@@ -494,6 +497,7 @@ func productDetailResponse(product service.Product) ProductDetailResponse {
 		Attributes:  jsonAttributes(product.Attributes),
 		CreatedAt:   product.CreatedAt,
 		UpdatedAt:   product.UpdatedAt,
+		DeletedAt:   product.DeletedAt,
 	}
 }
 

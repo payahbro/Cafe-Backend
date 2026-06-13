@@ -117,6 +117,50 @@ func TestProductHandlerListProductsPassesIncludeDeleted(t *testing.T) {
 	}
 }
 
+func TestProductHandlerListProductsReturnsDeletedAtForSoftDeletedProduct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	deletedAt := time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC)
+	fakeService := &fakeProductReader{
+		list: &service.ProductList{
+			Items: []service.Product{
+				{
+					ID:         "11111111-1111-4111-8111-111111111111",
+					Name:       "Deleted Latte",
+					Price:      25000,
+					Category:   "coffee",
+					Status:     "unavailable",
+					ImageURL:   stringPtr("https://example.supabase.co/storage/v1/object/public/products/deleted-latte.png"),
+					Rating:     4.5,
+					TotalSold:  120,
+					Attributes: []byte(`{"temperature":["hot","iced"]}`),
+					CreatedAt:  time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+					UpdatedAt:  deletedAt,
+					DeletedAt:  &deletedAt,
+				},
+			},
+			Limit: 10,
+		},
+	}
+
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService)
+	router.GET("/products", productHandler.ListProducts)
+
+	req := httptest.NewRequest(http.MethodGet, "/products?include_deleted=true", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+
+	body := resp.Body.String()
+	if !strings.Contains(body, `"deleted_at":"2026-05-26T02:00:00Z"`) {
+		t.Fatalf("response body missing deleted_at: %s", body)
+	}
+}
+
 func TestProductHandlerGetProductReturnsProduct(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
