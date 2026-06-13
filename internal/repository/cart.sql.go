@@ -67,6 +67,37 @@ func (q *Queries) DeleteCartItemByID(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const deleteCartItemForUser = `-- name: DeleteCartItemForUser :one
+DELETE FROM public.cart_items ci
+USING public.carts c
+WHERE ci.id = $1
+  AND ci.cart_id = c.id
+  AND c.user_id = $2
+RETURNING ci.cart_id
+`
+
+type DeleteCartItemForUserParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) DeleteCartItemForUser(ctx context.Context, arg DeleteCartItemForUserParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, deleteCartItemForUser, arg.ID, arg.UserID)
+	var cartID pgtype.UUID
+	err := row.Scan(&cartID)
+	return cartID, err
+}
+
+const deleteCartItemsByCartID = `-- name: DeleteCartItemsByCartID :exec
+DELETE FROM public.cart_items
+WHERE cart_id = $1
+`
+
+func (q *Queries) DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteCartItemsByCartID, cartID)
+	return err
+}
+
 const deleteCartItemsByIDs = `-- name: DeleteCartItemsByIDs :exec
 DELETE FROM public.cart_items
 WHERE id = ANY($1::uuid[])
@@ -95,6 +126,62 @@ func (q *Queries) GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart
 	return i, err
 }
 
+const listCartItemsByCartID = `-- name: ListCartItemsByCartID :many
+SELECT
+    ci.id AS item_id,
+    ci.product_id,
+    p.name,
+    p.image_url,
+    p.price,
+    ci.quantity,
+    p.status,
+    p.deleted_at
+FROM public.cart_items ci
+JOIN public.products p ON p.id = ci.product_id
+WHERE ci.cart_id = $1
+ORDER BY ci.created_at ASC, ci.id ASC
+`
+
+type ListCartItemsByCartIDRow struct {
+	ItemID    pgtype.UUID        `json:"item_id"`
+	ProductID pgtype.UUID        `json:"product_id"`
+	Name      string             `json:"name"`
+	ImageUrl  pgtype.Text        `json:"image_url"`
+	Price     int32              `json:"price"`
+	Quantity  int32              `json:"quantity"`
+	Status    ProductStatus      `json:"status"`
+	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+}
+
+func (q *Queries) ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error) {
+	rows, err := q.db.Query(ctx, listCartItemsByCartID, cartID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCartItemsByCartIDRow
+	for rows.Next() {
+		var i ListCartItemsByCartIDRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.ProductID,
+			&i.Name,
+			&i.ImageUrl,
+			&i.Price,
+			&i.Quantity,
+			&i.Status,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchCart = `-- name: TouchCart :exec
 UPDATE public.carts
 SET updated_at = NOW()
@@ -120,6 +207,37 @@ type UpdateCartItemQuantityParams struct {
 
 func (q *Queries) UpdateCartItemQuantity(ctx context.Context, arg UpdateCartItemQuantityParams) (CartItem, error) {
 	row := q.db.QueryRow(ctx, updateCartItemQuantity, arg.ID, arg.Quantity)
+	var i CartItem
+	err := row.Scan(
+		&i.ID,
+		&i.CartID,
+		&i.ProductID,
+		&i.Quantity,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateCartItemQuantityForUser = `-- name: UpdateCartItemQuantityForUser :one
+UPDATE public.cart_items ci
+SET quantity = $2,
+    updated_at = NOW()
+FROM public.carts c
+WHERE ci.id = $1
+  AND ci.cart_id = c.id
+  AND c.user_id = $3
+RETURNING ci.id, ci.cart_id, ci.product_id, ci.quantity, ci.created_at, ci.updated_at
+`
+
+type UpdateCartItemQuantityForUserParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Quantity int32       `json:"quantity"`
+	UserID   pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) UpdateCartItemQuantityForUser(ctx context.Context, arg UpdateCartItemQuantityForUserParams) (CartItem, error) {
+	row := q.db.QueryRow(ctx, updateCartItemQuantityForUser, arg.ID, arg.Quantity, arg.UserID)
 	var i CartItem
 	err := row.Scan(
 		&i.ID,

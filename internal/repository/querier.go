@@ -20,6 +20,8 @@ type Querier interface {
 	CreatePaymentRefund(ctx context.Context, arg CreatePaymentRefundParams) (PaymentRefund, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
 	DeleteCartItemByID(ctx context.Context, id pgtype.UUID) error
+	DeleteCartItemForUser(ctx context.Context, arg DeleteCartItemForUserParams) (pgtype.UUID, error)
+	DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error
 	DeleteCartItemsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) error
 	GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (Payment, error)
 	GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart, error)
@@ -28,6 +30,7 @@ type Querier interface {
 	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (Product, error)
 	GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdRow, error)
+	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
 	ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserIDParams) ([]Order, error)
 	ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
@@ -41,6 +44,7 @@ type Querier interface {
 	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (Product, error)
 	TouchCart(ctx context.Context, id pgtype.UUID) error
 	UpdateCartItemQuantity(ctx context.Context, arg UpdateCartItemQuantityParams) (CartItem, error)
+	UpdateCartItemQuantityForUser(ctx context.Context, arg UpdateCartItemQuantityForUserParams) (CartItem, error)
 	UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) (Order, error)
 	UpdatePaymentAfterWebhook(ctx context.Context, arg UpdatePaymentAfterWebhookParams) (Payment, error)
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error)

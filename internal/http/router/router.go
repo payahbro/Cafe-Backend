@@ -37,12 +37,15 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 		productCache = cache.NewProductCache(redisClient)
 	}
 	productService := service.NewProductService(repo, productTxRunner, productCache)
+	cartTxRunner := service.NewCartTxRunner(dbPool, repo)
+	cartService := service.NewCartService(repo, cartTxRunner)
 
 	// Handler/HTTP
 	healthHandler := handler.NewHealthHandler(cfg, dbPool, redisClient)
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService, cfg.Supabase.URL)
 	productHandler := handler.NewProductHandler(productService, cfg.Supabase.URL)
+	cartHandler := handler.NewCartHandler(cartService)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -69,6 +72,15 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Products.PATCH("/:id/status", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRolePEGAWAI, repository.UserRoleADMIN), productHandler.UpdateProductStatus)
 	v1Products.DELETE("/:id", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), productHandler.DeleteProduct)
 	v1Products.PATCH("/:id/restore", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), productHandler.RestoreProduct)
+
+	// cart
+	v1Cart := v1.Group("/cart")
+	v1Cart.Use(middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER))
+	v1Cart.GET("", cartHandler.GetCart)
+	v1Cart.POST("/items", cartHandler.AddItem)
+	v1Cart.DELETE("/items", cartHandler.ClearItems)
+	v1Cart.PATCH("/items/:item_id", cartHandler.UpdateItem)
+	v1Cart.DELETE("/items/:item_id", cartHandler.DeleteItem)
 
 	return r
 }
