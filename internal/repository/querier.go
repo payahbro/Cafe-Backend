@@ -11,7 +11,10 @@ import (
 )
 
 type Querier interface {
+	AcquireOrderNumberDateLock(ctx context.Context, dateKey string) error
 	AddOrIncrementCartItem(ctx context.Context, arg AddOrIncrementCartItemParams) (CartItem, error)
+	CountOrdersByOrderNumberPrefix(ctx context.Context, prefix string) (int64, error)
+	CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg CountPendingOrderItemsByCartItemIDsParams) (int64, error)
 	CreateCart(ctx context.Context, userID pgtype.UUID) (Cart, error)
 	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
 	CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) (OrderItem, error)
@@ -24,6 +27,7 @@ type Querier interface {
 	DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error
 	DeleteCartItemsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) error
 	DeleteCartItemsByIDsReturningCartIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]pgtype.UUID, error)
+	DecrementProductStock(ctx context.Context, arg DecrementProductStockParams) (Product, error)
 	GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (Payment, error)
 	GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
@@ -31,11 +35,14 @@ type Querier interface {
 	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (Product, error)
 	GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdRow, error)
+	ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error)
 	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
+	ListOrders(ctx context.Context, arg ListOrdersParams) ([]ListOrdersRow, error)
 	ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserIDParams) ([]Order, error)
 	ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
+	LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (Product, error)
 	LockPendingOutboxEvents(ctx context.Context, limit int32) ([]OutboxEvent, error)
 	MarkOutboxProcessing(ctx context.Context, id pgtype.UUID) error
 	MarkOutboxRetry(ctx context.Context, arg MarkOutboxRetryParams) error

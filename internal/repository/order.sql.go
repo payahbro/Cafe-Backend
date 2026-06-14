@@ -58,6 +58,183 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order
 	return i, err
 }
 
+const listCheckoutCartItemsForUser = `-- name: ListCheckoutCartItemsForUser :many
+SELECT
+    ci.id AS cart_item_id,
+    ci.product_id,
+    p.name AS product_name,
+    p.price,
+    p.category,
+    p.status,
+    p.attributes,
+    p.stock,
+    p.deleted_at,
+    ci.quantity
+FROM public.cart_items ci
+JOIN public.carts c ON c.id = ci.cart_id
+JOIN public.products p ON p.id = ci.product_id
+WHERE c.user_id = $1
+  AND ci.id = ANY($2::uuid[])
+ORDER BY ci.created_at ASC, ci.id ASC
+FOR UPDATE OF ci
+`
+
+type ListCheckoutCartItemsForUserParams struct {
+	UserID      pgtype.UUID   `json:"user_id"`
+	CartItemIds []pgtype.UUID `json:"cart_item_ids"`
+}
+
+type ListCheckoutCartItemsForUserRow struct {
+	CartItemID pgtype.UUID        `json:"cart_item_id"`
+	ProductID  pgtype.UUID        `json:"product_id"`
+	ProductName string             `json:"product_name"`
+	Price      int32              `json:"price"`
+	Category   ProductCategory    `json:"category"`
+	Status     ProductStatus      `json:"status"`
+	Attributes []byte             `json:"attributes"`
+	Stock      int32              `json:"stock"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+	Quantity   int32              `json:"quantity"`
+}
+
+func (q *Queries) ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error) {
+	rows, err := q.db.Query(ctx, listCheckoutCartItemsForUser, arg.UserID, arg.CartItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCheckoutCartItemsForUserRow
+	for rows.Next() {
+		var i ListCheckoutCartItemsForUserRow
+		if err := rows.Scan(
+			&i.CartItemID,
+			&i.ProductID,
+			&i.ProductName,
+			&i.Price,
+			&i.Category,
+			&i.Status,
+			&i.Attributes,
+			&i.Stock,
+			&i.DeletedAt,
+			&i.Quantity,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countPendingOrderItemsByCartItemIDs = `-- name: CountPendingOrderItemsByCartItemIDs :one
+SELECT COUNT(*)::bigint
+FROM public.order_items oi
+JOIN public.orders o ON o.id = oi.order_id
+WHERE o.user_id = $1
+  AND o.status = 'PENDING'
+  AND oi.cart_item_id = ANY($2::uuid[])
+`
+
+type CountPendingOrderItemsByCartItemIDsParams struct {
+	UserID      pgtype.UUID   `json:"user_id"`
+	CartItemIds []pgtype.UUID `json:"cart_item_ids"`
+}
+
+func (q *Queries) CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg CountPendingOrderItemsByCartItemIDsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingOrderItemsByCartItemIDs, arg.UserID, arg.CartItemIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const acquireOrderNumberDateLock = `-- name: AcquireOrderNumberDateLock :exec
+SELECT pg_advisory_xact_lock(hashtext($1))
+`
+
+func (q *Queries) AcquireOrderNumberDateLock(ctx context.Context, dateKey string) error {
+	_, err := q.db.Exec(ctx, acquireOrderNumberDateLock, dateKey)
+	return err
+}
+
+const countOrdersByOrderNumberPrefix = `-- name: CountOrdersByOrderNumberPrefix :one
+SELECT COUNT(*)::bigint
+FROM public.orders
+WHERE order_number LIKE $1 || '%'
+`
+
+func (q *Queries) CountOrdersByOrderNumberPrefix(ctx context.Context, prefix string) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrdersByOrderNumberPrefix, prefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const lockProductByIDForUpdate = `-- name: LockProductByIDForUpdate :one
+SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+FROM public.products
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (Product, error) {
+	row := q.db.QueryRow(ctx, lockProductByIDForUpdate, id)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const decrementProductStock = `-- name: DecrementProductStock :one
+UPDATE public.products
+SET stock = stock - $2
+WHERE id = $1
+  AND stock >= $2
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+type DecrementProductStockParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Quantity int32       `json:"quantity"`
+}
+
+func (q *Queries) DecrementProductStock(ctx context.Context, arg DecrementProductStockParams) (Product, error) {
+	row := q.db.QueryRow(ctx, decrementProductStock, arg.ID, arg.Quantity)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const createOrderItem = `-- name: CreateOrderItem :one
 INSERT INTO public.order_items (
     order_id,
@@ -206,6 +383,69 @@ func (q *Queries) ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserID
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrders = `-- name: ListOrders :many
+SELECT
+    id,
+    order_number,
+    user_id,
+    status,
+    total_amount,
+    created_at
+FROM public.orders
+WHERE ($1::uuid IS NULL OR user_id = $1)
+  AND ($2::text = '' OR status = NULLIF($2, '')::public.order_status)
+ORDER BY created_at DESC, id DESC
+LIMIT $3 OFFSET $4
+`
+
+type ListOrdersParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Status string      `json:"status"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+type ListOrdersRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	OrderNumber string             `json:"order_number"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Status      OrderStatus        `json:"status"`
+	TotalAmount int32              `json:"total_amount"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListOrders(ctx context.Context, arg ListOrdersParams) ([]ListOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listOrders,
+		arg.UserID,
+		arg.Status,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrdersRow
+	for rows.Next() {
+		var i ListOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNumber,
+			&i.UserID,
+			&i.Status,
+			&i.TotalAmount,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

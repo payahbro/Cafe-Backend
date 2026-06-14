@@ -39,6 +39,8 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	productService := service.NewProductService(repo, productTxRunner, productCache)
 	cartTxRunner := service.NewCartTxRunner(dbPool, repo)
 	cartService := service.NewCartService(repo, cartTxRunner)
+	orderTxRunner := service.NewOrderTxRunner(dbPool, repo)
+	orderService := service.NewOrderService(repo, orderTxRunner, nil)
 
 	// Handler/HTTP
 	healthHandler := handler.NewHealthHandler(cfg, dbPool, redisClient)
@@ -46,6 +48,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	userHandler := handler.NewUserHandler(userService, cfg.Supabase.URL)
 	productHandler := handler.NewProductHandler(productService, cfg.Supabase.URL)
 	cartHandler := handler.NewCartHandler(cartService, cfg.Internal.APIKey)
+	orderHandler := handler.NewOrderHandler(orderService)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -81,6 +84,13 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Cart.DELETE("/items", cartHandler.ClearItems)
 	v1Cart.PATCH("/items/:item_id", cartHandler.UpdateItem)
 	v1Cart.DELETE("/items/:item_id", cartHandler.DeleteItem)
+
+	// order
+	v1Orders := v1.Group("/orders")
+	v1Orders.Use(middleware.AuthRequired(jwtVerifier, repo))
+	v1Orders.POST("/checkout", middleware.RequireRoles(repository.UserRoleCUSTOMER), orderHandler.Checkout)
+	v1Orders.GET("", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.ListOrders)
+	v1Orders.GET("/:order_id", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.GetOrder)
 
 	// internal
 	v1Internal := v1.Group("/internal")
