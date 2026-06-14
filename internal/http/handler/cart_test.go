@@ -304,17 +304,118 @@ func TestCartHandlerClearItemsReturnsSuccess(t *testing.T) {
 	}
 }
 
+func TestCartHandlerClearInternalItemsReturnsSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeCartService{}
+	router := gin.New()
+	cartHandler := NewCartHandler(fakeService, "secret")
+	router.DELETE("/internal/cart/items", cartHandler.ClearInternalItems)
+
+	req := httptest.NewRequest(http.MethodDelete, "/internal/cart/items", strings.NewReader(`{"item_ids":["33333333-3333-4333-8333-333333333333"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Api-Key", "secret")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !fakeService.clearByIDsCalled {
+		t.Fatalf("expected ClearItemsByIDs to be called")
+	}
+	if len(fakeService.itemIDs) != 1 || fakeService.itemIDs[0] != "33333333-3333-4333-8333-333333333333" {
+		t.Fatalf("item ids = %v", fakeService.itemIDs)
+	}
+	if !strings.Contains(resp.Body.String(), `"message":"Cart items cleared"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestCartHandlerClearInternalItemsRejectsMissingAPIKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeCartService{}
+	router := gin.New()
+	cartHandler := NewCartHandler(fakeService, "secret")
+	router.DELETE("/internal/cart/items", cartHandler.ClearInternalItems)
+
+	req := httptest.NewRequest(http.MethodDelete, "/internal/cart/items", strings.NewReader(`{"item_ids":["33333333-3333-4333-8333-333333333333"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.clearByIDsCalled {
+		t.Fatalf("service should not be called without api key")
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"UNAUTHORIZED"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestCartHandlerClearInternalItemsRejectsEmptyItemIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeCartService{}
+	router := gin.New()
+	cartHandler := NewCartHandler(fakeService, "secret")
+	router.DELETE("/internal/cart/items", cartHandler.ClearInternalItems)
+
+	req := httptest.NewRequest(http.MethodDelete, "/internal/cart/items", strings.NewReader(`{"item_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Api-Key", "secret")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.clearByIDsCalled {
+		t.Fatalf("service should not be called for empty ids")
+	}
+	if !strings.Contains(resp.Body.String(), `"code":"VALIDATION_ERROR"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestCartHandlerClearInternalItemsRejectsInvalidItemID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeCartService{}
+	router := gin.New()
+	cartHandler := NewCartHandler(fakeService, "secret")
+	router.DELETE("/internal/cart/items", cartHandler.ClearInternalItems)
+
+	req := httptest.NewRequest(http.MethodDelete, "/internal/cart/items", strings.NewReader(`{"item_ids":["not-a-uuid"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Api-Key", "secret")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.clearByIDsCalled {
+		t.Fatalf("service should not be called for invalid ids")
+	}
+}
+
 type fakeCartService struct {
-	cart         *service.Cart
-	err          error
-	userID       string
-	itemID       string
-	addInput     service.AddCartItemInput
-	updateInput  service.UpdateCartItemInput
-	addCalled    bool
-	updateCalled bool
-	deleteCalled bool
-	clearCalled  bool
+	cart             *service.Cart
+	err              error
+	userID           string
+	itemID           string
+	itemIDs          []string
+	addInput         service.AddCartItemInput
+	updateInput      service.UpdateCartItemInput
+	addCalled        bool
+	updateCalled     bool
+	deleteCalled     bool
+	clearCalled      bool
+	clearByIDsCalled bool
 }
 
 func (f *fakeCartService) GetCart(_ context.Context, userID string) (*service.Cart, error) {
@@ -356,6 +457,12 @@ func (f *fakeCartService) DeleteItem(_ context.Context, userID string, itemID st
 func (f *fakeCartService) ClearItems(_ context.Context, userID string) error {
 	f.clearCalled = true
 	f.userID = userID
+	return f.err
+}
+
+func (f *fakeCartService) ClearItemsByIDs(_ context.Context, itemIDs []string) error {
+	f.clearByIDsCalled = true
+	f.itemIDs = itemIDs
 	return f.err
 }
 

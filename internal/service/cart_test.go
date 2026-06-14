@@ -308,6 +308,68 @@ func TestCartServiceClearItemsIsIdempotentWhenCartDoesNotExist(t *testing.T) {
 	}
 }
 
+func TestCartServiceClearItemsByIDsDeletesItemsAndTouchesAffectedCarts(t *testing.T) {
+	itemIDs := []string{
+		"33333333-3333-4333-8333-333333333333",
+		"55555555-5555-4555-8555-555555555555",
+	}
+	firstCartID := mustUUID(t, "22222222-2222-4222-8222-222222222222")
+	secondCartID := mustUUID(t, "66666666-6666-4666-8666-666666666666")
+	txRepo := &fakeCartRepo{
+		deletedCartIDs: []pgtype.UUID{firstCartID, firstCartID, secondCartID},
+	}
+	service := NewCartService(&fakeCartRepo{}, &fakeCartTxRunner{repo: txRepo})
+
+	err := service.ClearItemsByIDs(context.Background(), itemIDs)
+	if err != nil {
+		t.Fatalf("clear items by ids: %v", err)
+	}
+
+	if !txRepo.deleteItemsByIDsCalled {
+		t.Fatalf("expected items to be deleted by ids")
+	}
+	if len(txRepo.deleteItemsIDs) != 2 {
+		t.Fatalf("delete ids len = %d", len(txRepo.deleteItemsIDs))
+	}
+	if len(txRepo.touchedCartIDs) != 2 {
+		t.Fatalf("touched cart ids len = %d", len(txRepo.touchedCartIDs))
+	}
+	if txRepo.touchedCartIDs[0].String() != firstCartID.String() || txRepo.touchedCartIDs[1].String() != secondCartID.String() {
+		t.Fatalf("touched cart ids = %v", txRepo.touchedCartIDs)
+	}
+}
+
+func TestCartServiceClearItemsByIDsIsIdempotentWhenNoItemsFound(t *testing.T) {
+	txRepo := &fakeCartRepo{}
+	service := NewCartService(&fakeCartRepo{}, &fakeCartTxRunner{repo: txRepo})
+
+	err := service.ClearItemsByIDs(context.Background(), []string{"33333333-3333-4333-8333-333333333333"})
+	if err != nil {
+		t.Fatalf("clear items by ids: %v", err)
+	}
+	if len(txRepo.touchedCartIDs) != 0 {
+		t.Fatalf("expected no touched carts, got %d", len(txRepo.touchedCartIDs))
+	}
+}
+
+func TestCartServiceClearItemsByIDsRejectsEmptyInput(t *testing.T) {
+	service := NewCartService(&fakeCartRepo{}, &fakeCartTxRunner{repo: &fakeCartRepo{}})
+
+	err := service.ClearItemsByIDs(context.Background(), nil)
+	if !errors.Is(err, ErrInvalidCartItemID) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCartServiceClearItemsByIDsRejectsInvalidID(t *testing.T) {
+	service := NewCartService(&fakeCartRepo{}, &fakeCartTxRunner{repo: &fakeCartRepo{}})
+
+	err := service.ClearItemsByIDs(context.Background(), []string{"not-a-uuid"})
+	if !errors.Is(err, ErrInvalidCartItemID) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 type fakeCartTxRunner struct {
 	repo   cartRepository
 	called bool
@@ -323,26 +385,30 @@ func (f *fakeCartTxRunner) Run(ctx context.Context, fn func(cartRepository) erro
 }
 
 type fakeCartRepo struct {
-	cart             repository.Cart
-	product          repository.Product
-	items            []repository.ListCartItemsByCartIDRow
-	getCartErr       error
-	productErr       error
-	listItemsErr     error
-	updateItemErr    error
-	deleteItemErr    error
-	addItemArg       repository.AddOrIncrementCartItemParams
-	updateItemArg    repository.UpdateCartItemQuantityForUserParams
-	deleteItemArg    repository.DeleteCartItemForUserParams
-	updatedItem      repository.CartItem
-	deletedCartID    pgtype.UUID
-	clearCartID      pgtype.UUID
-	createCartCalled bool
-	addItemCalled    bool
-	touchCartCalled  bool
-	updateItemCalled bool
-	deleteItemCalled bool
-	clearItemsCalled bool
+	cart                   repository.Cart
+	product                repository.Product
+	items                  []repository.ListCartItemsByCartIDRow
+	getCartErr             error
+	productErr             error
+	listItemsErr           error
+	updateItemErr          error
+	deleteItemErr          error
+	addItemArg             repository.AddOrIncrementCartItemParams
+	updateItemArg          repository.UpdateCartItemQuantityForUserParams
+	deleteItemArg          repository.DeleteCartItemForUserParams
+	updatedItem            repository.CartItem
+	deletedCartID          pgtype.UUID
+	deletedCartIDs         []pgtype.UUID
+	clearCartID            pgtype.UUID
+	deleteItemsIDs         []pgtype.UUID
+	touchedCartIDs         []pgtype.UUID
+	createCartCalled       bool
+	addItemCalled          bool
+	touchCartCalled        bool
+	updateItemCalled       bool
+	deleteItemCalled       bool
+	clearItemsCalled       bool
+	deleteItemsByIDsCalled bool
 }
 
 func (f *fakeCartRepo) GetCartByUserID(ctx context.Context, userID pgtype.UUID) (repository.Cart, error) {
@@ -375,6 +441,7 @@ func (f *fakeCartRepo) AddOrIncrementCartItem(ctx context.Context, arg repositor
 
 func (f *fakeCartRepo) TouchCart(ctx context.Context, id pgtype.UUID) error {
 	f.touchCartCalled = true
+	f.touchedCartIDs = append(f.touchedCartIDs, id)
 	return nil
 }
 
@@ -407,6 +474,12 @@ func (f *fakeCartRepo) DeleteCartItemsByCartID(ctx context.Context, cartID pgtyp
 	f.clearItemsCalled = true
 	f.clearCartID = cartID
 	return nil
+}
+
+func (f *fakeCartRepo) DeleteCartItemsByIDsReturningCartIDs(ctx context.Context, itemIDs []pgtype.UUID) ([]pgtype.UUID, error) {
+	f.deleteItemsByIDsCalled = true
+	f.deleteItemsIDs = itemIDs
+	return f.deletedCartIDs, nil
 }
 
 func cartRow(t *testing.T, cartID, userID string, updatedAt time.Time) repository.Cart {

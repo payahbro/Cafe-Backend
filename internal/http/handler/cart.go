@@ -15,7 +15,8 @@ import (
 )
 
 type CartHandler struct {
-	cartService cartManager
+	cartService    cartManager
+	internalAPIKey string
 }
 
 type cartManager interface {
@@ -24,6 +25,7 @@ type cartManager interface {
 	UpdateItemQuantity(ctx context.Context, userID string, itemID string, input service.UpdateCartItemInput) (*service.Cart, error)
 	DeleteItem(ctx context.Context, userID string, itemID string) error
 	ClearItems(ctx context.Context, userID string) error
+	ClearItemsByIDs(ctx context.Context, itemIDs []string) error
 }
 
 type AddCartItemRequest struct {
@@ -33,6 +35,10 @@ type AddCartItemRequest struct {
 
 type UpdateCartItemRequest struct {
 	Quantity int32 `json:"quantity"`
+}
+
+type ClearInternalCartItemsRequest struct {
+	ItemIDs []string `json:"item_ids"`
 }
 
 type CartResponse struct {
@@ -54,8 +60,12 @@ type CartItemResponse struct {
 	IsAvailable bool    `json:"is_available"`
 }
 
-func NewCartHandler(cartService cartManager) *CartHandler {
-	return &CartHandler{cartService: cartService}
+func NewCartHandler(cartService cartManager, internalAPIKey ...string) *CartHandler {
+	handler := &CartHandler{cartService: cartService}
+	if len(internalAPIKey) > 0 {
+		handler.internalAPIKey = internalAPIKey[0]
+	}
+	return handler
 }
 
 func (h *CartHandler) GetCart(c *gin.Context) {
@@ -210,6 +220,38 @@ func (h *CartHandler) ClearItems(c *gin.Context) {
 	dto.WriteSuccess(c, http.StatusOK, nil, "Item berhasil dihapus dari cart")
 }
 
+func (h *CartHandler) ClearInternalItems(c *gin.Context) {
+	if h.cartService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Cart service unavailable", nil)
+		return
+	}
+
+	if h.internalAPIKey == "" || c.GetHeader("X-Internal-Api-Key") != h.internalAPIKey {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	var req ClearInternalCartItemsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"body": "Payload tidak valid",
+		})
+		return
+	}
+
+	if validationErrors := validateClearInternalCartItemsRequest(req); len(validationErrors) > 0 {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", validationErrors)
+		return
+	}
+
+	if err := h.cartService.ClearItemsByIDs(c.Request.Context(), req.ItemIDs); err != nil {
+		writeCartServiceError(c, err)
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, nil, "Cart items cleared")
+}
+
 func validateAddCartItemRequest(req AddCartItemRequest) map[string]string {
 	validationErrors := make(map[string]string)
 	if !isValidUUID(req.ProductID) {
@@ -217,6 +259,21 @@ func validateAddCartItemRequest(req AddCartItemRequest) map[string]string {
 	}
 	if req.Quantity < 1 {
 		validationErrors["quantity"] = "Quantity minimal 1"
+	}
+	return validationErrors
+}
+
+func validateClearInternalCartItemsRequest(req ClearInternalCartItemsRequest) map[string]string {
+	validationErrors := make(map[string]string)
+	if len(req.ItemIDs) == 0 {
+		validationErrors["item_ids"] = "Item IDs wajib diisi"
+		return validationErrors
+	}
+	for _, itemID := range req.ItemIDs {
+		if !isValidUUID(strings.TrimSpace(itemID)) {
+			validationErrors["item_ids"] = "Semua item_id harus berupa UUID"
+			return validationErrors
+		}
 	}
 	return validationErrors
 }

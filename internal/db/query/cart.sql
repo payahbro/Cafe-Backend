@@ -66,6 +66,11 @@ WHERE cart_id = $1;
 DELETE FROM public.cart_items
 WHERE id = ANY($1::uuid[]);
 
+-- name: DeleteCartItemsByIDsReturningCartIDs :many
+DELETE FROM public.cart_items
+WHERE id = ANY($1::uuid[])
+RETURNING cart_id;
+
 -- name: TouchCart :exec
 UPDATE public.carts
 SET updated_at = NOW()

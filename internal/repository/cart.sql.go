@@ -108,6 +108,32 @@ func (q *Queries) DeleteCartItemsByIDs(ctx context.Context, dollar_1 []pgtype.UU
 	return err
 }
 
+const deleteCartItemsByIDsReturningCartIDs = `-- name: DeleteCartItemsByIDsReturningCartIDs :many
+DELETE FROM public.cart_items
+WHERE id = ANY($1::uuid[])
+RETURNING cart_id
+`
+
+func (q *Queries) DeleteCartItemsByIDsReturningCartIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteCartItemsByIDsReturningCartIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var cartID pgtype.UUID
+		if err := rows.Scan(&cartID); err != nil {
+			return nil, err
+		}
+		items = append(items, cartID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCartByUserID = `-- name: GetCartByUserID :one
 SELECT id, user_id, created_at, updated_at
 FROM public.carts

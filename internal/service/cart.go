@@ -32,6 +32,7 @@ type cartRepository interface {
 	UpdateCartItemQuantityForUser(ctx context.Context, arg repository.UpdateCartItemQuantityForUserParams) (repository.CartItem, error)
 	DeleteCartItemForUser(ctx context.Context, arg repository.DeleteCartItemForUserParams) (pgtype.UUID, error)
 	DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error
+	DeleteCartItemsByIDsReturningCartIDs(ctx context.Context, itemIDs []pgtype.UUID) ([]pgtype.UUID, error)
 	TouchCart(ctx context.Context, id pgtype.UUID) error
 	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]repository.ListCartItemsByCartIDRow, error)
 }
@@ -308,6 +309,48 @@ func (s *CartService) ClearItems(ctx context.Context, userID string) error {
 		if err := repo.TouchCart(ctx, cart.ID); err != nil {
 			return fmt.Errorf("touch cart: %w", err)
 		}
+		return nil
+	})
+}
+
+func (s *CartService) ClearItemsByIDs(ctx context.Context, itemIDs []string) error {
+	if s.repo == nil {
+		return errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return errors.New("cart transaction runner missing")
+	}
+	if len(itemIDs) == 0 {
+		return ErrInvalidCartItemID
+	}
+
+	parsedItemIDs := make([]pgtype.UUID, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		itemUUID, err := parseRequiredUUID(itemID)
+		if err != nil {
+			return ErrInvalidCartItemID
+		}
+		parsedItemIDs = append(parsedItemIDs, itemUUID)
+	}
+
+	return s.txRunner.Run(ctx, func(repo cartRepository) error {
+		cartIDs, err := repo.DeleteCartItemsByIDsReturningCartIDs(ctx, parsedItemIDs)
+		if err != nil {
+			return fmt.Errorf("delete cart items by ids: %w", err)
+		}
+
+		touched := make(map[string]struct{}, len(cartIDs))
+		for _, cartID := range cartIDs {
+			key := cartID.String()
+			if _, ok := touched[key]; ok {
+				continue
+			}
+			touched[key] = struct{}{}
+			if err := repo.TouchCart(ctx, cartID); err != nil {
+				return fmt.Errorf("touch cart: %w", err)
+			}
+		}
+
 		return nil
 	})
 }

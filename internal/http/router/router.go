@@ -45,7 +45,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService, cfg.Supabase.URL)
 	productHandler := handler.NewProductHandler(productService, cfg.Supabase.URL)
-	cartHandler := handler.NewCartHandler(cartService)
+	cartHandler := handler.NewCartHandler(cartService, cfg.Internal.APIKey)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -81,6 +81,10 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Cart.DELETE("/items", cartHandler.ClearItems)
 	v1Cart.PATCH("/items/:item_id", cartHandler.UpdateItem)
 	v1Cart.DELETE("/items/:item_id", cartHandler.DeleteItem)
+
+	// internal
+	v1Internal := v1.Group("/internal")
+	v1Internal.DELETE("/cart/items", cartHandler.ClearInternalItems)
 
 	return r
 }

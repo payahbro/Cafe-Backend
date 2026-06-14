@@ -23,6 +23,7 @@ type Querier interface {
 	DeleteCartItemForUser(ctx context.Context, arg DeleteCartItemForUserParams) (pgtype.UUID, error)
 	DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error
 	DeleteCartItemsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) error
+	DeleteCartItemsByIDsReturningCartIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]pgtype.UUID, error)
 	GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (Payment, error)
 	GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
