@@ -256,7 +256,7 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 			Status:      repository.ProductStatus(status),
 			ImageUrl:    pgtype.Text{String: input.ImageURL, Valid: input.ImageURL != ""},
 			Attributes:  input.Attributes,
-			Stock:       0,
+			Stock:       100,
 		})
 		if err != nil {
 			if isUniqueViolation(err) {

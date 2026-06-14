@@ -322,7 +322,7 @@ func TestProductServiceCreateProductCreatesRowInTransactionAndInvalidatesListCac
 	if txRepo.createArg.Status != repository.ProductStatusAvailable {
 		t.Fatalf("create status = %q", txRepo.createArg.Status)
 	}
-	if txRepo.createArg.Stock != 0 {
+	if txRepo.createArg.Stock != 100 {
 		t.Fatalf("create stock = %d", txRepo.createArg.Stock)
 	}
 	if product.Name != "Americano" {
