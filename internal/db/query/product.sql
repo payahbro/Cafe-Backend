@@ -13,6 +13,20 @@ INSERT INTO public.products (
 )
 RETURNING *;
 
+-- name: CreateProductWithDefaultStock :one
+INSERT INTO public.products (
+    name,
+    description,
+    price,
+    category,
+    status,
+    image_url,
+    attributes
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING *;
+
 -- name: GetProductByID :one
 SELECT *
 FROM public.products

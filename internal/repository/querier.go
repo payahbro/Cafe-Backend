@@ -22,6 +22,7 @@ type Querier interface {
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payment, error)
 	CreatePaymentRefund(ctx context.Context, arg CreatePaymentRefundParams) (PaymentRefund, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
+	CreateProductWithDefaultStock(ctx context.Context, arg CreateProductWithDefaultStockParams) (Product, error)
 	DeleteCartItemByID(ctx context.Context, id pgtype.UUID) error
 	DeleteCartItemForUser(ctx context.Context, arg DeleteCartItemForUserParams) (pgtype.UUID, error)
 	DeleteCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) error

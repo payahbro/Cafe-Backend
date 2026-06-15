@@ -69,6 +69,61 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 	return i, err
 }
 
+const createProductWithDefaultStock = `-- name: CreateProductWithDefaultStock :one
+INSERT INTO public.products (
+    name,
+    description,
+    price,
+    category,
+    status,
+    image_url,
+    attributes
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+type CreateProductWithDefaultStockParams struct {
+	Name        string          `json:"name"`
+	Description pgtype.Text     `json:"description"`
+	Price       int32           `json:"price"`
+	Category    ProductCategory `json:"category"`
+	Status      ProductStatus   `json:"status"`
+	ImageUrl    pgtype.Text     `json:"image_url"`
+	Attributes  []byte          `json:"attributes"`
+}
+
+func (q *Queries) CreateProductWithDefaultStock(ctx context.Context, arg CreateProductWithDefaultStockParams) (Product, error) {
+	row := q.db.QueryRow(ctx, createProductWithDefaultStock,
+		arg.Name,
+		arg.Description,
+		arg.Price,
+		arg.Category,
+		arg.Status,
+		arg.ImageUrl,
+		arg.Attributes,
+	)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getProductByID = `-- name: GetProductByID :one
 SELECT id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
 FROM public.products

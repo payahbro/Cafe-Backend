@@ -266,6 +266,7 @@ func TestProductHandlerCreateProductReturnsCreated(t *testing.T) {
 			Category:    "coffee",
 			Status:      "available",
 			ImageURL:    stringPtr("https://example.supabase.co/storage/v1/object/public/products/americano.png"),
+			Stock:       75,
 			Rating:      0,
 			TotalSold:   0,
 			Attributes:  []byte(`{"temperature":["hot","iced"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
@@ -284,6 +285,7 @@ func TestProductHandlerCreateProductReturnsCreated(t *testing.T) {
 		"price":25000,
 		"category":"coffee",
 		"status":"available",
+		"stock":75,
 		"image_url":"https://example.supabase.co/storage/v1/object/public/products/americano.png",
 		"attributes":{
 			"temperature":["hot","iced"],
@@ -306,16 +308,106 @@ func TestProductHandlerCreateProductReturnsCreated(t *testing.T) {
 	if fakeService.createInput.Status != "available" {
 		t.Fatalf("create status = %q", fakeService.createInput.Status)
 	}
+	if fakeService.createInput.Stock == nil || *fakeService.createInput.Stock != 75 {
+		t.Fatalf("create stock = %v", fakeService.createInput.Stock)
+	}
 
 	responseBody := resp.Body.String()
 	for _, want := range []string{
 		`"success":true`,
 		`"name":"Americano"`,
+		`"stock":75`,
 		`"message":"Produk berhasil dibuat"`,
 	} {
 		if !strings.Contains(responseBody, want) {
 			t.Fatalf("response body missing %s: %s", want, responseBody)
 		}
+	}
+}
+
+func TestProductHandlerCreateProductAllowsMissingStock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{
+		product: &service.Product{
+			ID:         "11111111-1111-4111-8111-111111111111",
+			Name:       "Americano",
+			Price:      25000,
+			Category:   "coffee",
+			Status:     "available",
+			ImageURL:   stringPtr("https://example.supabase.co/storage/v1/object/public/products/americano.png"),
+			Stock:      100,
+			Attributes: []byte(`{"temperature":["hot"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+			CreatedAt:  time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+			UpdatedAt:  time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+		},
+	}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService, "https://example.supabase.co")
+	router.POST("/products", productHandler.CreateProduct)
+
+	body := `{
+		"name":"Americano",
+		"price":25000,
+		"category":"coffee",
+		"image_url":"https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		"attributes":{
+			"temperature":["hot"],
+			"sugar_levels":["normal"],
+			"ice_levels":["normal"],
+			"sizes":["medium"]
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/products", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.createInput.Stock != nil {
+		t.Fatalf("create stock = %v", fakeService.createInput.Stock)
+	}
+	if !strings.Contains(resp.Body.String(), `"stock":100`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
+func TestProductHandlerCreateProductRejectsNegativeStock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeProductReader{}
+	router := gin.New()
+	productHandler := NewProductHandler(fakeService, "https://example.supabase.co")
+	router.POST("/products", productHandler.CreateProduct)
+
+	body := `{
+		"name":"Americano",
+		"price":25000,
+		"category":"coffee",
+		"stock":-1,
+		"image_url":"https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		"attributes":{
+			"temperature":["hot"],
+			"sugar_levels":["normal"],
+			"ice_levels":["normal"],
+			"sizes":["medium"]
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/products", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.createCalled {
+		t.Fatalf("service should not be called for negative stock")
+	}
+	if !strings.Contains(resp.Body.String(), `"stock":"Stock tidak boleh negatif"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
 	}
 }
 

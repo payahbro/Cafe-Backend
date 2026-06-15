@@ -313,17 +313,17 @@ func TestProductServiceCreateProductCreatesRowInTransactionAndInvalidatesListCac
 	if baseRepo.createCalled {
 		t.Fatalf("base repository should not create product outside transaction")
 	}
-	if !txRepo.createCalled {
-		t.Fatalf("expected transaction repository to create product")
+	if txRepo.createCalled {
+		t.Fatalf("explicit-stock create query should not be used when stock is missing")
 	}
-	if txRepo.createArg.Name != "Americano" {
-		t.Fatalf("create name = %q", txRepo.createArg.Name)
+	if !txRepo.createDefaultStockCalled {
+		t.Fatalf("expected default-stock create query")
 	}
-	if txRepo.createArg.Status != repository.ProductStatusAvailable {
-		t.Fatalf("create status = %q", txRepo.createArg.Status)
+	if txRepo.createDefaultStockArg.Name != "Americano" {
+		t.Fatalf("create name = %q", txRepo.createDefaultStockArg.Name)
 	}
-	if txRepo.createArg.Stock != 100 {
-		t.Fatalf("create stock = %d", txRepo.createArg.Stock)
+	if txRepo.createDefaultStockArg.Status != repository.ProductStatusAvailable {
+		t.Fatalf("create status = %q", txRepo.createDefaultStockArg.Status)
 	}
 	if product.Name != "Americano" {
 		t.Fatalf("product name = %q", product.Name)
@@ -333,6 +333,68 @@ func TestProductServiceCreateProductCreatesRowInTransactionAndInvalidatesListCac
 	}
 	if cache.invalidatedBeforeTxDone {
 		t.Fatalf("cache invalidation should run after transaction runner finishes")
+	}
+}
+
+func TestProductServiceCreateProductUsesExplicitStock(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		getByNameErr: pgx.ErrNoRows,
+		product:      productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	service := NewProductService(&fakeProductRepo{}, txRunner, nil)
+	stock := int32(75)
+
+	_, err := service.CreateProduct(context.Background(), CreateProductInput{
+		Name:       "Americano",
+		Price:      25000,
+		Category:   "coffee",
+		ImageURL:   "https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		Attributes: []byte(`{"temperature":["hot"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+		Stock:      &stock,
+	})
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	if !txRepo.createCalled {
+		t.Fatalf("expected explicit-stock create query")
+	}
+	if txRepo.createDefaultStockCalled {
+		t.Fatalf("default-stock create query should not be used when stock is provided")
+	}
+	if txRepo.createArg.Stock != 75 {
+		t.Fatalf("create stock = %d", txRepo.createArg.Stock)
+	}
+}
+
+func TestProductServiceCreateProductUsesDatabaseDefaultStockWhenMissing(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		getByNameErr: pgx.ErrNoRows,
+		product:      productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	service := NewProductService(&fakeProductRepo{}, txRunner, nil)
+
+	_, err := service.CreateProduct(context.Background(), CreateProductInput{
+		Name:       "Americano",
+		Price:      25000,
+		Category:   "coffee",
+		ImageURL:   "https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		Attributes: []byte(`{"temperature":["hot"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+	})
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	if txRepo.createCalled {
+		t.Fatalf("explicit-stock create query should not be used when stock is missing")
+	}
+	if !txRepo.createDefaultStockCalled {
+		t.Fatalf("expected default-stock create query")
+	}
+	if txRepo.createDefaultStockArg.Name != "Americano" {
+		t.Fatalf("create name = %q", txRepo.createDefaultStockArg.Name)
 	}
 }
 
@@ -871,6 +933,7 @@ type fakeProductRepo struct {
 	getByNameErr              error
 	listArg                   repository.ListProductsParams
 	createArg                 repository.CreateProductParams
+	createDefaultStockArg     repository.CreateProductWithDefaultStockParams
 	updateArg                 repository.UpdateProductParams
 	updateStatusArg           repository.UpdateProductStatusParams
 	deletedID                 pgtype.UUID
@@ -879,6 +942,7 @@ type fakeProductRepo struct {
 	getCalled                 bool
 	getIncludingDeletedCalled bool
 	createCalled              bool
+	createDefaultStockCalled  bool
 	updateCalled              bool
 	updateStatusCalled        bool
 	deleteCalled              bool
@@ -926,6 +990,15 @@ func (f *fakeProductRepo) GetProductByNameCI(ctx context.Context, lower string) 
 func (f *fakeProductRepo) CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error) {
 	f.createCalled = true
 	f.createArg = arg
+	if f.err != nil {
+		return repository.Product{}, f.err
+	}
+	return f.product, nil
+}
+
+func (f *fakeProductRepo) CreateProductWithDefaultStock(ctx context.Context, arg repository.CreateProductWithDefaultStockParams) (repository.Product, error) {
+	f.createDefaultStockCalled = true
+	f.createDefaultStockArg = arg
 	if f.err != nil {
 		return repository.Product{}, f.err
 	}

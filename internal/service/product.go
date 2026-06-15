@@ -32,6 +32,7 @@ type productRepository interface {
 	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (repository.Product, error)
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
+	CreateProductWithDefaultStock(ctx context.Context, arg repository.CreateProductWithDefaultStockParams) (repository.Product, error)
 	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
 	UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error)
 	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error)
@@ -60,6 +61,7 @@ type Product struct {
 	Category    string
 	Status      string
 	ImageURL    *string
+	Stock       int32
 	Rating      float64
 	TotalSold   int32
 	Attributes  []byte
@@ -99,6 +101,7 @@ type CreateProductInput struct {
 	Price       int32
 	Category    string
 	Status      string
+	Stock       *int32
 	ImageURL    string
 	Attributes  []byte
 }
@@ -248,7 +251,7 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 			return fmt.Errorf("check product name: %w", err)
 		}
 
-		created, err := repo.CreateProduct(ctx, repository.CreateProductParams{
+		createParams := repository.CreateProductWithDefaultStockParams{
 			Name:        name,
 			Description: optionalText(input.Description),
 			Price:       input.Price,
@@ -256,8 +259,24 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 			Status:      repository.ProductStatus(status),
 			ImageUrl:    pgtype.Text{String: input.ImageURL, Valid: input.ImageURL != ""},
 			Attributes:  input.Attributes,
-			Stock:       100,
-		})
+		}
+
+		var created repository.Product
+		var err error
+		if input.Stock == nil {
+			created, err = repo.CreateProductWithDefaultStock(ctx, createParams)
+		} else {
+			created, err = repo.CreateProduct(ctx, repository.CreateProductParams{
+				Name:        createParams.Name,
+				Description: createParams.Description,
+				Price:       createParams.Price,
+				Category:    createParams.Category,
+				Status:      createParams.Status,
+				ImageUrl:    createParams.ImageUrl,
+				Attributes:  createParams.Attributes,
+				Stock:       *input.Stock,
+			})
+		}
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrProductNameAlreadyExists
@@ -559,6 +578,7 @@ func productFromRow(row repository.Product) Product {
 		Category:    string(row.Category),
 		Status:      string(row.Status),
 		ImageURL:    textPtr(row.ImageUrl),
+		Stock:       row.Stock,
 		Rating:      numericFloat64(row.Rating),
 		TotalSold:   row.TotalSold,
 		Attributes:  row.Attributes,

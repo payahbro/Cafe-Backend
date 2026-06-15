@@ -39,6 +39,7 @@ type ProductListResponse struct {
 	Category   string          `json:"category"`
 	Status     string          `json:"status"`
 	ImageURL   *string         `json:"image_url"`
+	Stock      int32           `json:"stock"`
 	Rating     float64         `json:"rating"`
 	TotalSold  int32           `json:"total_sold"`
 	Attributes json.RawMessage `json:"attributes"`
@@ -55,6 +56,7 @@ type ProductDetailResponse struct {
 	Category    string          `json:"category"`
 	Status      string          `json:"status"`
 	ImageURL    *string         `json:"image_url"`
+	Stock       int32           `json:"stock"`
 	Rating      float64         `json:"rating"`
 	TotalSold   int32           `json:"total_sold"`
 	Attributes  json.RawMessage `json:"attributes"`
@@ -83,6 +85,7 @@ type CreateProductRequest struct {
 	Price       int32               `json:"price"`
 	Category    string              `json:"category"`
 	Status      string              `json:"status"`
+	Stock       *int32              `json:"stock"`
 	ImageURL    string              `json:"image_url"`
 	Attributes  map[string][]string `json:"attributes"`
 }
@@ -220,6 +223,7 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 		Price:       req.Price,
 		Category:    req.Category,
 		Status:      req.Status,
+		Stock:       req.Stock,
 		ImageURL:    req.ImageURL,
 		Attributes:  attributes,
 	})
@@ -472,6 +476,7 @@ func productListResponses(products []service.Product) []ProductListResponse {
 			Category:   product.Category,
 			Status:     product.Status,
 			ImageURL:   product.ImageURL,
+			Stock:      product.Stock,
 			Rating:     product.Rating,
 			TotalSold:  product.TotalSold,
 			Attributes: jsonAttributes(product.Attributes),
@@ -492,6 +497,7 @@ func productDetailResponse(product service.Product) ProductDetailResponse {
 		Category:    product.Category,
 		Status:      product.Status,
 		ImageURL:    product.ImageURL,
+		Stock:       product.Stock,
 		Rating:      product.Rating,
 		TotalSold:   product.TotalSold,
 		Attributes:  jsonAttributes(product.Attributes),
@@ -575,6 +581,10 @@ func validateCreateProductRequest(req CreateProductRequest, supabaseURL string) 
 
 	if !isAllowedValue(req.Status, []string{"available", "out_of_stock", "unavailable"}) {
 		errors["status"] = "Status harus available, out_of_stock, atau unavailable"
+	}
+
+	if req.Stock != nil && *req.Stock < 0 {
+		errors["stock"] = "Stock tidak boleh negatif"
 	}
 
 	if !isSupabaseProductStorageURL(req.ImageURL, supabaseURL) {
