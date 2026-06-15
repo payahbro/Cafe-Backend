@@ -48,7 +48,11 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	userHandler := handler.NewUserHandler(userService, cfg.Supabase.URL)
 	productHandler := handler.NewProductHandler(productService, cfg.Supabase.URL)
 	cartHandler := handler.NewCartHandler(cartService, cfg.Internal.APIKey)
-	orderHandler := handler.NewOrderHandler(orderService)
+	orderHandler := handler.NewOrderHandler(
+		orderService,
+		handler.WithOrderCartClearer(cartService),
+		handler.WithOrderInternalAPIKey(cfg.Internal.APIKey),
+	)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -90,11 +94,14 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Orders.Use(middleware.AuthRequired(jwtVerifier, repo))
 	v1Orders.POST("/checkout", middleware.RequireRoles(repository.UserRoleCUSTOMER), orderHandler.Checkout)
 	v1Orders.GET("", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.ListOrders)
+	v1Orders.PATCH("/:order_id/cancel", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRoleADMIN), orderHandler.CancelOrder)
+	v1Orders.PATCH("/:order_id/status", middleware.RequireRoles(repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.UpdateStatus)
 	v1Orders.GET("/:order_id", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.GetOrder)
 
 	// internal
 	v1Internal := v1.Group("/internal")
 	v1Internal.DELETE("/cart/items", cartHandler.ClearInternalItems)
+	v1Internal.PATCH("/orders/:order_id/status", orderHandler.InternalUpdateStatus)
 
 	return r
 }

@@ -17,13 +17,36 @@ import (
 )
 
 type OrderHandler struct {
-	orderService orderManager
+	orderService    orderManager
+	cartClearer     orderCartClearer
+	internalAPIKey  string
 }
 
 type orderManager interface {
 	Checkout(ctx context.Context, input service.CheckoutInput) (*service.Order, error)
 	ListOrders(ctx context.Context, input service.ListOrdersInput) (*service.OrderList, error)
 	GetOrder(ctx context.Context, input service.GetOrderInput) (*service.Order, error)
+	CancelOrder(ctx context.Context, input service.CancelOrderInput) (*service.OrderStatusUpdate, error)
+	UpdateOrderStatus(ctx context.Context, input service.UpdateOrderStatusInput) (*service.OrderStatusUpdate, error)
+	ConfirmOrderFromPayment(ctx context.Context, input service.InternalConfirmOrderInput) (*service.InternalConfirmOrderResult, error)
+}
+
+type orderCartClearer interface {
+	ClearItemsByIDs(ctx context.Context, itemIDs []string) error
+}
+
+type OrderHandlerOption func(*OrderHandler)
+
+func WithOrderCartClearer(cartClearer orderCartClearer) OrderHandlerOption {
+	return func(h *OrderHandler) {
+		h.cartClearer = cartClearer
+	}
+}
+
+func WithOrderInternalAPIKey(apiKey string) OrderHandlerOption {
+	return func(h *OrderHandler) {
+		h.internalAPIKey = apiKey
+	}
 }
 
 type CheckoutOrderRequest struct {
@@ -67,6 +90,16 @@ type OrderSummaryResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type UpdateOrderStatusRequest struct {
+	Status string `json:"status"`
+}
+
+type OrderStatusResponse struct {
+	OrderID   string    `json:"order_id"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type orderListEnvelope struct {
 	Success    bool                   `json:"success"`
 	Data       []OrderSummaryResponse `json:"data"`
@@ -81,8 +114,12 @@ type orderPagination struct {
 	HasPrev    bool    `json:"has_prev"`
 }
 
-func NewOrderHandler(orderService orderManager) *OrderHandler {
-	return &OrderHandler{orderService: orderService}
+func NewOrderHandler(orderService orderManager, options ...OrderHandlerOption) *OrderHandler {
+	handler := &OrderHandler{orderService: orderService}
+	for _, option := range options {
+		option(handler)
+	}
+	return handler
 }
 
 func (h *OrderHandler) Checkout(c *gin.Context) {
@@ -237,6 +274,129 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 	dto.WriteSuccess(c, http.StatusOK, orderDetailResponse(order), "Order berhasil diambil")
 }
 
+func (h *OrderHandler) CancelOrder(c *gin.Context) {
+	if h.orderService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Order service unavailable", nil)
+		return
+	}
+
+	user, ok := middleware.GetAuthenticatedUser(c)
+	if !ok {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	orderID := strings.TrimSpace(c.Param("order_id"))
+	if !isValidUUID(orderID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"order_id": "ID order harus berupa UUID",
+		})
+		return
+	}
+
+	result, err := h.orderService.CancelOrder(c.Request.Context(), service.CancelOrderInput{
+		OrderID:     orderID,
+		ActorUserID: user.ID,
+		ActorRole:   string(user.Role),
+	})
+	if err != nil {
+		writeOrderServiceError(c, err)
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, orderStatusResponse(result), "Order berhasil dibatalkan")
+}
+
+func (h *OrderHandler) UpdateStatus(c *gin.Context) {
+	if h.orderService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Order service unavailable", nil)
+		return
+	}
+
+	user, ok := middleware.GetAuthenticatedUser(c)
+	if !ok {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	orderID := strings.TrimSpace(c.Param("order_id"))
+	if !isValidUUID(orderID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"order_id": "ID order harus berupa UUID",
+		})
+		return
+	}
+
+	var req UpdateOrderStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"body": "Payload tidak valid",
+		})
+		return
+	}
+	req.Status = strings.TrimSpace(req.Status)
+	if req.Status == "" {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"status": "Status wajib diisi",
+		})
+		return
+	}
+
+	result, err := h.orderService.UpdateOrderStatus(c.Request.Context(), service.UpdateOrderStatusInput{
+		OrderID:   orderID,
+		ActorRole: string(user.Role),
+		Status:    req.Status,
+	})
+	if err != nil {
+		writeOrderServiceError(c, err)
+		return
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, orderStatusResponse(result), "Status order berhasil diperbarui")
+}
+
+func (h *OrderHandler) InternalUpdateStatus(c *gin.Context) {
+	if h.orderService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Order service unavailable", nil)
+		return
+	}
+	if h.internalAPIKey == "" || c.GetHeader("X-Internal-Api-Key") != h.internalAPIKey {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	orderID := strings.TrimSpace(c.Param("order_id"))
+	if !isValidUUID(orderID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"order_id": "ID order harus berupa UUID",
+		})
+		return
+	}
+
+	result, err := h.orderService.ConfirmOrderFromPayment(c.Request.Context(), service.InternalConfirmOrderInput{OrderID: orderID})
+	if err != nil {
+		writeOrderServiceError(c, err)
+		return
+	}
+	if result == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+		return
+	}
+
+	if len(result.CartItemIDs) > 0 {
+		if h.cartClearer == nil {
+			dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Cart service unavailable", nil)
+			return
+		}
+		if err := h.cartClearer.ClearItemsByIDs(c.Request.Context(), result.CartItemIDs); err != nil {
+			dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+			return
+		}
+	}
+
+	dto.WriteSuccess(c, http.StatusOK, nil, "Order status updated to CONFIRMED")
+}
+
 func normalizeCheckoutOrderRequest(req CheckoutOrderRequest) CheckoutOrderRequest {
 	if req.Notes != nil {
 		notes := strings.TrimSpace(*req.Notes)
@@ -315,6 +475,12 @@ func writeOrderServiceError(c *gin.Context, err error) {
 		dto.WriteError(c, http.StatusUnprocessableEntity, "PRODUCT_OUT_OF_STOCK", "Produk habis", nil)
 	case errors.Is(err, service.ErrOrderInsufficientStock):
 		dto.WriteError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_STOCK", "Stok produk tidak mencukupi", nil)
+	case errors.Is(err, service.ErrOrderAlreadyCancelled):
+		dto.WriteError(c, http.StatusUnprocessableEntity, "ORDER_ALREADY_CANCELLED", "Order sudah dibatalkan", nil)
+	case errors.Is(err, service.ErrOrderNotCancellable):
+		dto.WriteError(c, http.StatusUnprocessableEntity, "ORDER_NOT_CANCELLABLE", "Order tidak bisa dibatalkan", nil)
+	case errors.Is(err, service.ErrOrderInvalidStatusTransition):
+		dto.WriteError(c, http.StatusUnprocessableEntity, "INVALID_STATUS_TRANSITION", "Transisi status order tidak valid", nil)
 	default:
 		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
 	}
@@ -366,4 +532,15 @@ func orderSummaryResponses(items []service.OrderSummary) []OrderSummaryResponse 
 		})
 	}
 	return responses
+}
+
+func orderStatusResponse(status *service.OrderStatusUpdate) OrderStatusResponse {
+	if status == nil {
+		return OrderStatusResponse{}
+	}
+	return OrderStatusResponse{
+		OrderID:   status.OrderID,
+		Status:    status.Status,
+		UpdatedAt: status.UpdatedAt,
+	}
 }

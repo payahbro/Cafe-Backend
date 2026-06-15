@@ -34,6 +34,9 @@ var (
 	ErrOrderProductOutOfStock    = errors.New("order product out of stock")
 	ErrOrderInsufficientStock    = errors.New("order insufficient stock")
 	ErrOrderNotFound             = errors.New("order not found")
+	ErrOrderNotCancellable       = errors.New("order not cancellable")
+	ErrOrderAlreadyCancelled     = errors.New("order already cancelled")
+	ErrOrderInvalidStatusTransition = errors.New("order invalid status transition")
 )
 
 type orderRepository interface {
@@ -41,13 +44,17 @@ type orderRepository interface {
 	CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg repository.CountPendingOrderItemsByCartItemIDsParams) (int64, error)
 	AcquireOrderNumberDateLock(ctx context.Context, dateKey string) error
 	CountOrdersByOrderNumberPrefix(ctx context.Context, prefix string) (int64, error)
+	LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Order, error)
 	LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Product, error)
 	DecrementProductStock(ctx context.Context, arg repository.DecrementProductStockParams) (repository.Product, error)
+	IncrementProductStock(ctx context.Context, arg repository.IncrementProductStockParams) (repository.Product, error)
+	IncrementProductTotalSold(ctx context.Context, arg repository.IncrementProductTotalSoldParams) (repository.Product, error)
 	CreateOrder(ctx context.Context, arg repository.CreateOrderParams) (repository.Order, error)
 	CreateOrderItem(ctx context.Context, arg repository.CreateOrderItemParams) (repository.OrderItem, error)
 	ListOrders(ctx context.Context, arg repository.ListOrdersParams) ([]repository.ListOrdersRow, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (repository.Order, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.OrderItem, error)
+	UpdateOrderStatus(ctx context.Context, arg repository.UpdateOrderStatusParams) (repository.Order, error)
 }
 
 type orderTxRunner interface {
@@ -92,6 +99,34 @@ type GetOrderInput struct {
 	OrderID     string
 	ActorUserID string
 	ActorRole   string
+}
+
+type CancelOrderInput struct {
+	OrderID     string
+	ActorUserID string
+	ActorRole   string
+}
+
+type UpdateOrderStatusInput struct {
+	OrderID   string
+	ActorRole string
+	Status    string
+}
+
+type InternalConfirmOrderInput struct {
+	OrderID string
+}
+
+type OrderStatusUpdate struct {
+	OrderID   string
+	Status    string
+	UpdatedAt time.Time
+}
+
+type InternalConfirmOrderResult struct {
+	OrderID     string
+	Status      string
+	CartItemIDs []string
 }
 
 type Order struct {
@@ -477,6 +512,210 @@ func (s *OrderService) GetOrder(ctx context.Context, input GetOrderInput) (*Orde
 	return orderFromRows(order, items), nil
 }
 
+func (s *OrderService) CancelOrder(ctx context.Context, input CancelOrderInput) (*OrderStatusUpdate, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("order transaction runner missing")
+	}
+
+	orderUUID, err := parseRequiredUUID(input.OrderID)
+	if err != nil {
+		return nil, ErrInvalidOrderID
+	}
+	actorUUID, err := parseRequiredUUID(input.ActorUserID)
+	if err != nil {
+		return nil, ErrInvalidOrderUserID
+	}
+	role := repository.UserRole(input.ActorRole)
+	if role != repository.UserRoleCUSTOMER && role != repository.UserRoleADMIN {
+		return nil, ErrOrderForbidden
+	}
+
+	var updated repository.Order
+	err = s.txRunner.Run(ctx, func(repo orderRepository) error {
+		order, err := repo.LockOrderByIDForUpdate(ctx, orderUUID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrOrderNotFound
+			}
+			return fmt.Errorf("lock order: %w", err)
+		}
+		if role == repository.UserRoleCUSTOMER && order.UserID.String() != actorUUID.String() {
+			return ErrOrderNotFound
+		}
+		if order.Status == repository.OrderStatusCANCELLED {
+			return ErrOrderAlreadyCancelled
+		}
+		if order.Status != repository.OrderStatusPENDING {
+			return ErrOrderNotCancellable
+		}
+
+		items, err := repo.ListOrderItemsByOrderID(ctx, order.ID)
+		if err != nil {
+			return fmt.Errorf("list order items: %w", err)
+		}
+		for _, item := range items {
+			if _, err := repo.LockProductByIDForUpdate(ctx, item.ProductID); err != nil {
+				return fmt.Errorf("lock product: %w", err)
+			}
+			if _, err := repo.IncrementProductStock(ctx, repository.IncrementProductStockParams{
+				ID:       item.ProductID,
+				Quantity: item.Quantity,
+			}); err != nil {
+				return fmt.Errorf("restore product stock: %w", err)
+			}
+		}
+
+		updatedOrder, err := repo.UpdateOrderStatus(ctx, repository.UpdateOrderStatusParams{
+			ID:     order.ID,
+			Status: repository.OrderStatusCANCELLED,
+		})
+		if err != nil {
+			return fmt.Errorf("update order status: %w", err)
+		}
+		updated = updatedOrder
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return orderStatusUpdateFromRow(updated), nil
+}
+
+func (s *OrderService) UpdateOrderStatus(ctx context.Context, input UpdateOrderStatusInput) (*OrderStatusUpdate, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("order transaction runner missing")
+	}
+
+	orderUUID, err := parseRequiredUUID(input.OrderID)
+	if err != nil {
+		return nil, ErrInvalidOrderID
+	}
+	role := repository.UserRole(input.ActorRole)
+	if role != repository.UserRolePEGAWAI && role != repository.UserRoleADMIN {
+		return nil, ErrOrderForbidden
+	}
+	targetStatus := repository.OrderStatus(strings.TrimSpace(input.Status))
+	if !isOrderStatus(targetStatus) {
+		return nil, ErrOrderInvalidStatus
+	}
+	if targetStatus != repository.OrderStatusCOMPLETED {
+		return nil, ErrOrderInvalidStatusTransition
+	}
+
+	var updated repository.Order
+	err = s.txRunner.Run(ctx, func(repo orderRepository) error {
+		order, err := repo.LockOrderByIDForUpdate(ctx, orderUUID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrOrderNotFound
+			}
+			return fmt.Errorf("lock order: %w", err)
+		}
+		if order.Status != repository.OrderStatusCONFIRMED {
+			return ErrOrderInvalidStatusTransition
+		}
+
+		updatedOrder, err := repo.UpdateOrderStatus(ctx, repository.UpdateOrderStatusParams{
+			ID:     order.ID,
+			Status: repository.OrderStatusCOMPLETED,
+		})
+		if err != nil {
+			return fmt.Errorf("update order status: %w", err)
+		}
+
+		items, err := repo.ListOrderItemsByOrderID(ctx, order.ID)
+		if err != nil {
+			return fmt.Errorf("list order items: %w", err)
+		}
+		for _, item := range items {
+			if _, err := repo.IncrementProductTotalSold(ctx, repository.IncrementProductTotalSoldParams{
+				ID:       item.ProductID,
+				Quantity: item.Quantity,
+			}); err != nil {
+				return fmt.Errorf("increment product total sold: %w", err)
+			}
+		}
+
+		updated = updatedOrder
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return orderStatusUpdateFromRow(updated), nil
+}
+
+func (s *OrderService) ConfirmOrderFromPayment(ctx context.Context, input InternalConfirmOrderInput) (*InternalConfirmOrderResult, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	if s.txRunner == nil {
+		return nil, errors.New("order transaction runner missing")
+	}
+
+	orderUUID, err := parseRequiredUUID(input.OrderID)
+	if err != nil {
+		return nil, ErrInvalidOrderID
+	}
+
+	var result InternalConfirmOrderResult
+	err = s.txRunner.Run(ctx, func(repo orderRepository) error {
+		order, err := repo.LockOrderByIDForUpdate(ctx, orderUUID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrOrderNotFound
+			}
+			return fmt.Errorf("lock order: %w", err)
+		}
+		if order.Status != repository.OrderStatusPENDING && order.Status != repository.OrderStatusCONFIRMED {
+			return ErrOrderInvalidStatusTransition
+		}
+
+		confirmed := order
+		if order.Status == repository.OrderStatusPENDING {
+			updatedOrder, err := repo.UpdateOrderStatus(ctx, repository.UpdateOrderStatusParams{
+				ID:     order.ID,
+				Status: repository.OrderStatusCONFIRMED,
+			})
+			if err != nil {
+				return fmt.Errorf("update order status: %w", err)
+			}
+			confirmed = updatedOrder
+		}
+
+		items, err := repo.ListOrderItemsByOrderID(ctx, order.ID)
+		if err != nil {
+			return fmt.Errorf("list order items: %w", err)
+		}
+		cartItemIDs := make([]string, 0, len(items))
+		for _, item := range items {
+			if item.CartItemID.Valid {
+				cartItemIDs = append(cartItemIDs, item.CartItemID.String())
+			}
+		}
+
+		result = InternalConfirmOrderResult{
+			OrderID:     confirmed.ID.String(),
+			Status:      string(confirmed.Status),
+			CartItemIDs: cartItemIDs,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func selectedAttributes(category repository.ProductCategory, productAttributes []byte, input map[string]string) ([]byte, error) {
 	options := map[string][]string{}
 	if len(productAttributes) > 0 {
@@ -647,5 +886,13 @@ func orderSummaryFromRow(row repository.ListOrdersRow) OrderSummary {
 		Status:      string(row.Status),
 		TotalAmount: row.TotalAmount,
 		CreatedAt:   row.CreatedAt.Time,
+	}
+}
+
+func orderStatusUpdateFromRow(row repository.Order) *OrderStatusUpdate {
+	return &OrderStatusUpdate{
+		OrderID:   row.ID.String(),
+		Status:    string(row.Status),
+		UpdatedAt: row.UpdatedAt.Time,
 	}
 }

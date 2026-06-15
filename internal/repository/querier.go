@@ -36,6 +36,8 @@ type Querier interface {
 	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (Product, error)
 	GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdRow, error)
+	IncrementProductStock(ctx context.Context, arg IncrementProductStockParams) (Product, error)
+	IncrementProductTotalSold(ctx context.Context, arg IncrementProductTotalSoldParams) (Product, error)
 	ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error)
 	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
@@ -43,6 +45,7 @@ type Querier interface {
 	ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserIDParams) ([]Order, error)
 	ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
+	LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (Order, error)
 	LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (Product, error)
 	LockPendingOutboxEvents(ctx context.Context, limit int32) ([]OutboxEvent, error)
 	MarkOutboxProcessing(ctx context.Context, id pgtype.UUID) error

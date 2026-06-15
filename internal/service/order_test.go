@@ -235,6 +235,191 @@ func TestOrderServiceGetOrderReturnsNotFoundForOtherCustomersOrder(t *testing.T)
 	}
 }
 
+func TestOrderServiceCancelOrderRestoresStockAndCancelsPendingOrder(t *testing.T) {
+	now := time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC)
+	orderID := "44444444-4444-4444-8444-444444444444"
+	userID := "11111111-1111-4111-8111-111111111111"
+	productID := "33333333-3333-4333-8333-333333333333"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, userID, "ORD-20260615-001", "PENDING", 50000, now),
+		orderItems: []repository.OrderItem{
+			orderItemRow(t, "55555555-5555-4555-8555-555555555555", orderID, productID, "22222222-2222-4222-8222-222222222222", 2, 50000, now),
+		},
+		lockedProducts: map[string]repository.Product{
+			productID: orderProductRow(t, productID, "Americano", "coffee", "available", 25000, 8, false, `{}`),
+		},
+		updatedOrder: orderRow(t, orderID, userID, "ORD-20260615-001", "CANCELLED", 50000, now.Add(time.Minute)),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	result, err := service.CancelOrder(context.Background(), CancelOrderInput{
+		OrderID:     orderID,
+		ActorUserID: userID,
+		ActorRole:   string(repository.UserRoleCUSTOMER),
+	})
+	if err != nil {
+		t.Fatalf("cancel order: %v", err)
+	}
+
+	if result.Status != "CANCELLED" {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if !txRepo.incrementStockCalled {
+		t.Fatalf("expected stock restore")
+	}
+	if txRepo.incrementStockArg.Quantity != 2 {
+		t.Fatalf("restore quantity = %d", txRepo.incrementStockArg.Quantity)
+	}
+	if txRepo.updateStatusArg.Status != repository.OrderStatusCANCELLED {
+		t.Fatalf("updated status = %q", txRepo.updateStatusArg.Status)
+	}
+}
+
+func TestOrderServiceCancelOrderReturnsNotFoundForOtherCustomersOrder(t *testing.T) {
+	orderID := "44444444-4444-4444-8444-444444444444"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, "99999999-9999-4999-8999-999999999999", "ORD-20260615-001", "PENDING", 50000, time.Now()),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	_, err := service.CancelOrder(context.Background(), CancelOrderInput{
+		OrderID:     orderID,
+		ActorUserID: "11111111-1111-4111-8111-111111111111",
+		ActorRole:   string(repository.UserRoleCUSTOMER),
+	})
+	if !errors.Is(err, ErrOrderNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+	if txRepo.updateStatusCalled {
+		t.Fatalf("order should not be cancelled")
+	}
+}
+
+func TestOrderServiceCancelOrderRejectsConfirmedOrder(t *testing.T) {
+	orderID := "44444444-4444-4444-8444-444444444444"
+	userID := "11111111-1111-4111-8111-111111111111"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, userID, "ORD-20260615-001", "CONFIRMED", 50000, time.Now()),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	_, err := service.CancelOrder(context.Background(), CancelOrderInput{
+		OrderID:     orderID,
+		ActorUserID: userID,
+		ActorRole:   string(repository.UserRoleCUSTOMER),
+	})
+	if !errors.Is(err, ErrOrderNotCancellable) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOrderServiceUpdateStatusCompletesConfirmedOrderAndUpdatesTotalSold(t *testing.T) {
+	now := time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC)
+	orderID := "44444444-4444-4444-8444-444444444444"
+	userID := "11111111-1111-4111-8111-111111111111"
+	productID := "33333333-3333-4333-8333-333333333333"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, userID, "ORD-20260615-001", "CONFIRMED", 50000, now),
+		orderItems: []repository.OrderItem{
+			orderItemRow(t, "55555555-5555-4555-8555-555555555555", orderID, productID, "22222222-2222-4222-8222-222222222222", 2, 50000, now),
+		},
+		updatedOrder: orderRow(t, orderID, userID, "ORD-20260615-001", "COMPLETED", 50000, now.Add(time.Minute)),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	result, err := service.UpdateOrderStatus(context.Background(), UpdateOrderStatusInput{
+		OrderID:   orderID,
+		ActorRole: string(repository.UserRolePEGAWAI),
+		Status:    "COMPLETED",
+	})
+	if err != nil {
+		t.Fatalf("update order status: %v", err)
+	}
+
+	if result.Status != "COMPLETED" {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if !txRepo.incrementTotalSoldCalled {
+		t.Fatalf("expected total_sold update")
+	}
+	if txRepo.incrementTotalSoldArg.Quantity != 2 {
+		t.Fatalf("total_sold quantity = %d", txRepo.incrementTotalSoldArg.Quantity)
+	}
+}
+
+func TestOrderServiceUpdateStatusRejectsAdminPendingToConfirmedForMVP(t *testing.T) {
+	orderID := "44444444-4444-4444-8444-444444444444"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, "11111111-1111-4111-8111-111111111111", "ORD-20260615-001", "PENDING", 50000, time.Now()),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	_, err := service.UpdateOrderStatus(context.Background(), UpdateOrderStatusInput{
+		OrderID:   orderID,
+		ActorRole: string(repository.UserRoleADMIN),
+		Status:    "CONFIRMED",
+	})
+	if !errors.Is(err, ErrOrderInvalidStatusTransition) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOrderServiceConfirmOrderFromPaymentConfirmsPendingAndReturnsCartItemIDs(t *testing.T) {
+	now := time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC)
+	orderID := "44444444-4444-4444-8444-444444444444"
+	userID := "11111111-1111-4111-8111-111111111111"
+	productID := "33333333-3333-4333-8333-333333333333"
+	cartItemID := "22222222-2222-4222-8222-222222222222"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, userID, "ORD-20260615-001", "PENDING", 50000, now),
+		orderItems: []repository.OrderItem{
+			orderItemRow(t, "55555555-5555-4555-8555-555555555555", orderID, productID, cartItemID, 2, 50000, now),
+		},
+		updatedOrder: orderRow(t, orderID, userID, "ORD-20260615-001", "CONFIRMED", 50000, now.Add(time.Minute)),
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	result, err := service.ConfirmOrderFromPayment(context.Background(), InternalConfirmOrderInput{OrderID: orderID})
+	if err != nil {
+		t.Fatalf("confirm order from payment: %v", err)
+	}
+
+	if result.Status != "CONFIRMED" {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if len(result.CartItemIDs) != 1 || result.CartItemIDs[0] != cartItemID {
+		t.Fatalf("cart item ids = %v", result.CartItemIDs)
+	}
+}
+
+func TestOrderServiceConfirmOrderFromPaymentIsIdempotentForConfirmedOrder(t *testing.T) {
+	now := time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC)
+	orderID := "44444444-4444-4444-8444-444444444444"
+	cartItemID := "22222222-2222-4222-8222-222222222222"
+	txRepo := &fakeOrderRepo{
+		order: orderRow(t, orderID, "11111111-1111-4111-8111-111111111111", "ORD-20260615-001", "CONFIRMED", 50000, now),
+		orderItems: []repository.OrderItem{
+			orderItemRow(t, "55555555-5555-4555-8555-555555555555", orderID, "33333333-3333-4333-8333-333333333333", cartItemID, 2, 50000, now),
+		},
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, time.Now)
+
+	result, err := service.ConfirmOrderFromPayment(context.Background(), InternalConfirmOrderInput{OrderID: orderID})
+	if err != nil {
+		t.Fatalf("confirm order from payment: %v", err)
+	}
+
+	if result.Status != "CONFIRMED" {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if txRepo.updateStatusCalled {
+		t.Fatalf("confirmed order should not be updated again")
+	}
+	if len(result.CartItemIDs) != 1 || result.CartItemIDs[0] != cartItemID {
+		t.Fatalf("cart item ids = %v", result.CartItemIDs)
+	}
+}
+
 type fakeOrderTxRunner struct {
 	repo   orderRepository
 	called bool
@@ -256,10 +441,14 @@ type fakeOrderRepo struct {
 	createdItems      []repository.OrderItem
 	listRows          []repository.ListOrdersRow
 	order             repository.Order
+	updatedOrder      repository.Order
 	orderItems        []repository.OrderItem
 	pendingCartItemCount int64
 	listArg           repository.ListOrdersParams
 	decrementArg      repository.DecrementProductStockParams
+	incrementStockArg repository.IncrementProductStockParams
+	incrementTotalSoldArg repository.IncrementProductTotalSoldParams
+	updateStatusArg   repository.UpdateOrderStatusParams
 	createOrderArg    repository.CreateOrderParams
 	createItemArgs    []repository.CreateOrderItemParams
 	getCheckoutErr    error
@@ -272,6 +461,9 @@ type fakeOrderRepo struct {
 	listItemsErr      error
 	createOrderCalled bool
 	decrementCalled   bool
+	incrementStockCalled bool
+	incrementTotalSoldCalled bool
+	updateStatusCalled bool
 }
 
 func (f *fakeOrderRepo) ListCheckoutCartItemsForUser(ctx context.Context, arg repository.ListCheckoutCartItemsForUserParams) ([]repository.ListCheckoutCartItemsForUserRow, error) {
@@ -303,6 +495,13 @@ func (f *fakeOrderRepo) LockProductByIDForUpdate(ctx context.Context, id pgtype.
 	return repository.Product{}, pgx.ErrNoRows
 }
 
+func (f *fakeOrderRepo) LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Order, error) {
+	if f.getOrderErr != nil {
+		return repository.Order{}, f.getOrderErr
+	}
+	return f.order, nil
+}
+
 func (f *fakeOrderRepo) DecrementProductStock(ctx context.Context, arg repository.DecrementProductStockParams) (repository.Product, error) {
 	f.decrementCalled = true
 	f.decrementArg = arg
@@ -310,6 +509,18 @@ func (f *fakeOrderRepo) DecrementProductStock(ctx context.Context, arg repositor
 		return repository.Product{}, f.decrementErr
 	}
 	return repository.Product{ID: arg.ID, Stock: 8}, nil
+}
+
+func (f *fakeOrderRepo) IncrementProductStock(ctx context.Context, arg repository.IncrementProductStockParams) (repository.Product, error) {
+	f.incrementStockCalled = true
+	f.incrementStockArg = arg
+	return repository.Product{ID: arg.ID, Stock: 10}, nil
+}
+
+func (f *fakeOrderRepo) IncrementProductTotalSold(ctx context.Context, arg repository.IncrementProductTotalSoldParams) (repository.Product, error) {
+	f.incrementTotalSoldCalled = true
+	f.incrementTotalSoldArg = arg
+	return repository.Product{ID: arg.ID, TotalSold: arg.Quantity}, nil
 }
 
 func (f *fakeOrderRepo) CreateOrder(ctx context.Context, arg repository.CreateOrderParams) (repository.Order, error) {
@@ -347,11 +558,47 @@ func (f *fakeOrderRepo) GetOrderByID(ctx context.Context, id pgtype.UUID) (repos
 	return f.order, nil
 }
 
+func (f *fakeOrderRepo) UpdateOrderStatus(ctx context.Context, arg repository.UpdateOrderStatusParams) (repository.Order, error) {
+	f.updateStatusCalled = true
+	f.updateStatusArg = arg
+	return f.updatedOrder, nil
+}
+
 func (f *fakeOrderRepo) ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.OrderItem, error) {
 	if f.listItemsErr != nil {
 		return nil, f.listItemsErr
 	}
 	return f.orderItems, nil
+}
+
+func orderRow(t *testing.T, orderID, userID, orderNumber, status string, totalAmount int32, updatedAt time.Time) repository.Order {
+	t.Helper()
+
+	return repository.Order{
+		ID:          mustUUIDForOrder(t, orderID),
+		OrderNumber: orderNumber,
+		UserID:      mustUUIDForOrder(t, userID),
+		Status:      repository.OrderStatus(status),
+		TotalAmount: totalAmount,
+		CreatedAt:   pgtype.Timestamptz{Time: updatedAt.Add(-time.Minute), Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: updatedAt, Valid: true},
+	}
+}
+
+func orderItemRow(t *testing.T, orderItemID, orderID, productID, cartItemID string, quantity, subtotal int32, createdAt time.Time) repository.OrderItem {
+	t.Helper()
+
+	return repository.OrderItem{
+		ID:              mustUUIDForOrder(t, orderItemID),
+		OrderID:         mustUUIDForOrder(t, orderID),
+		ProductID:       mustUUIDForOrder(t, productID),
+		CartItemID:      mustUUIDForOrder(t, cartItemID),
+		ProductName:     "Americano",
+		PriceAtCheckout: 25000,
+		Quantity:        quantity,
+		Subtotal:        subtotal,
+		CreatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
+	}
 }
 
 func checkoutCartItemRow(t *testing.T, cartItemID, productID, productName, category, status string, price, quantity, stock int32, deleted bool, attributes string) repository.ListCheckoutCartItemsForUserRow {

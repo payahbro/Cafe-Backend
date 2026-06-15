@@ -200,6 +200,30 @@ func (q *Queries) LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) 
 	return i, err
 }
 
+const lockOrderByIDForUpdate = `-- name: LockOrderByIDForUpdate :one
+SELECT id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+FROM public.orders
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (Order, error) {
+	row := q.db.QueryRow(ctx, lockOrderByIDForUpdate, id)
+	var i Order
+	err := row.Scan(
+		&i.ID,
+		&i.OrderNumber,
+		&i.UserID,
+		&i.Status,
+		&i.Notes,
+		&i.TotalAmount,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const decrementProductStock = `-- name: DecrementProductStock :one
 UPDATE public.products
 SET stock = stock - $2
@@ -215,6 +239,74 @@ type DecrementProductStockParams struct {
 
 func (q *Queries) DecrementProductStock(ctx context.Context, arg DecrementProductStockParams) (Product, error) {
 	row := q.db.QueryRow(ctx, decrementProductStock, arg.ID, arg.Quantity)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const incrementProductStock = `-- name: IncrementProductStock :one
+UPDATE public.products
+SET stock = stock + $2
+WHERE id = $1
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+type IncrementProductStockParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Quantity int32       `json:"quantity"`
+}
+
+func (q *Queries) IncrementProductStock(ctx context.Context, arg IncrementProductStockParams) (Product, error) {
+	row := q.db.QueryRow(ctx, incrementProductStock, arg.ID, arg.Quantity)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Price,
+		&i.Category,
+		&i.Status,
+		&i.ImageUrl,
+		&i.Attributes,
+		&i.Stock,
+		&i.Rating,
+		&i.TotalSold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const incrementProductTotalSold = `-- name: IncrementProductTotalSold :one
+UPDATE public.products
+SET total_sold = total_sold + $2
+WHERE id = $1
+RETURNING id, name, description, price, category, status, image_url, attributes, stock, rating, total_sold, created_at, updated_at, deleted_at
+`
+
+type IncrementProductTotalSoldParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Quantity int32       `json:"quantity"`
+}
+
+func (q *Queries) IncrementProductTotalSold(ctx context.Context, arg IncrementProductTotalSoldParams) (Product, error) {
+	row := q.db.QueryRow(ctx, incrementProductTotalSold, arg.ID, arg.Quantity)
 	var i Product
 	err := row.Scan(
 		&i.ID,

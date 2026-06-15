@@ -53,11 +53,29 @@ FROM public.products
 WHERE id = $1
 FOR UPDATE;
 
+-- name: LockOrderByIDForUpdate :one
+SELECT *
+FROM public.orders
+WHERE id = $1
+FOR UPDATE;
+
 -- name: DecrementProductStock :one
 UPDATE public.products
 SET stock = stock - $2
 WHERE id = $1
   AND stock >= $2
+RETURNING *;
+
+-- name: IncrementProductStock :one
+UPDATE public.products
+SET stock = stock + $2
+WHERE id = $1
+RETURNING *;
+
+-- name: IncrementProductTotalSold :one
+UPDATE public.products
+SET total_sold = total_sold + $2
+WHERE id = $1
 RETURNING *;
 
 -- name: CreateOrderItem :one
