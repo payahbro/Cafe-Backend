@@ -5,6 +5,7 @@ import (
 	"cafeTelkom/internal/config"
 	"cafeTelkom/internal/http/handler"
 	"cafeTelkom/internal/http/middleware"
+	midtransintegration "cafeTelkom/internal/integrations/midtrans"
 	"cafeTelkom/internal/integrations/supabase"
 	"cafeTelkom/internal/repository"
 	"cafeTelkom/internal/service"
@@ -41,6 +42,24 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	cartService := service.NewCartService(repo, cartTxRunner)
 	orderTxRunner := service.NewOrderTxRunner(dbPool, repo)
 	orderService := service.NewOrderService(repo, orderTxRunner, nil)
+	paymentTxRunner := service.NewPaymentTxRunner(dbPool, repo)
+	midtransClient := midtransintegration.NewClient(
+		cfg.Midtrans.ServerKey,
+		cfg.Midtrans.SnapBaseURL,
+		cfg.Midtrans.WebhookURL,
+		nil,
+	)
+	paymentService := service.NewPaymentService(
+		repo,
+		paymentTxRunner,
+		service.NewMidtransSnapClient(midtransClient),
+		orderService,
+		cartService,
+		service.PaymentServiceOptions{
+			ServerKey:  cfg.Midtrans.ServerKey,
+			WebhookURL: cfg.Midtrans.WebhookURL,
+		},
+	)
 
 	// Handler/HTTP
 	healthHandler := handler.NewHealthHandler(cfg, dbPool, redisClient)
@@ -53,6 +72,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 		handler.WithOrderCartClearer(cartService),
 		handler.WithOrderInternalAPIKey(cfg.Internal.APIKey),
 	)
+	paymentHandler := handler.NewPaymentHandler(paymentService, handler.WithPaymentLogger(log))
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -97,6 +117,12 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Orders.PATCH("/:order_id/cancel", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRoleADMIN), orderHandler.CancelOrder)
 	v1Orders.PATCH("/:order_id/status", middleware.RequireRoles(repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.UpdateStatus)
 	v1Orders.GET("/:order_id", middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRolePEGAWAI, repository.UserRoleADMIN), orderHandler.GetOrder)
+
+	// payment
+	v1Payments := v1.Group("/payments")
+	v1Payments.POST("/webhook", paymentHandler.Webhook)
+	v1Payments.POST("/initiate", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER), paymentHandler.Initiate)
+	v1Payments.GET("/order/:order_id", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRoleADMIN), paymentHandler.GetByOrder)
 
 	// internal
 	v1Internal := v1.Group("/internal")

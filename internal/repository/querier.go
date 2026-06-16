@@ -32,6 +32,7 @@ type Querier interface {
 	GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (Payment, error)
 	GetCartByUserID(ctx context.Context, userID pgtype.UUID) (Cart, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
+	GetPaymentByID(ctx context.Context, id pgtype.UUID) (Payment, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByIDIncludingDeleted(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByNameCI(ctx context.Context, lower string) (Product, error)

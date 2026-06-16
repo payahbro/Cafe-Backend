@@ -13,18 +13,20 @@ import (
 
 const createPayment = `-- name: CreatePayment :one
 INSERT INTO public.payments (
+    id,
     order_id,
     status,
     amount,
     midtrans_order_id,
     snap_redirect_url
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $5, $6
 )
 RETURNING id, order_id, status, amount, payment_method, midtrans_order_id, midtrans_transaction_id, snap_redirect_url, refund_amount, refund_reason, refunded_at, created_at, updated_at
 `
 
 type CreatePaymentParams struct {
+	ID              pgtype.UUID   `json:"id"`
 	OrderID         pgtype.UUID   `json:"order_id"`
 	Status          PaymentStatus `json:"status"`
 	Amount          int32         `json:"amount"`
@@ -34,12 +36,40 @@ type CreatePaymentParams struct {
 
 func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payment, error) {
 	row := q.db.QueryRow(ctx, createPayment,
+		arg.ID,
 		arg.OrderID,
 		arg.Status,
 		arg.Amount,
 		arg.MidtransOrderID,
 		arg.SnapRedirectUrl,
 	)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.OrderID,
+		&i.Status,
+		&i.Amount,
+		&i.PaymentMethod,
+		&i.MidtransOrderID,
+		&i.MidtransTransactionID,
+		&i.SnapRedirectUrl,
+		&i.RefundAmount,
+		&i.RefundReason,
+		&i.RefundedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPaymentByID = `-- name: GetPaymentByID :one
+SELECT id, order_id, status, amount, payment_method, midtrans_order_id, midtrans_transaction_id, snap_redirect_url, refund_amount, refund_reason, refunded_at, created_at, updated_at
+FROM public.payments
+WHERE id = $1
+`
+
+func (q *Queries) GetPaymentByID(ctx context.Context, id pgtype.UUID) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPaymentByID, id)
 	var i Payment
 	err := row.Scan(
 		&i.ID,
@@ -211,11 +241,16 @@ func (q *Queries) MarkPaymentRefunded(ctx context.Context, arg MarkPaymentRefund
 
 const updatePaymentAfterWebhook = `-- name: UpdatePaymentAfterWebhook :one
 UPDATE public.payments
-SET status = $2,
+SET status = $2::public.payment_status,
     payment_method = $3,
     midtrans_transaction_id = $4,
     snap_redirect_url = CASE
-        WHEN $2 IN ('SUCCESS', 'FAILED', 'EXPIRED', 'REFUNDED') THEN NULL
+        WHEN $2::public.payment_status IN (
+            'SUCCESS'::public.payment_status,
+            'FAILED'::public.payment_status,
+            'EXPIRED'::public.payment_status,
+            'REFUNDED'::public.payment_status
+        ) THEN NULL
         ELSE snap_redirect_url
     END
 WHERE id = $1

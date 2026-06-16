@@ -15,6 +15,7 @@ type Config struct {
 	Database DatabaseConfig
 	Internal InternalConfig
 	Supabase SupabaseConfig
+	Midtrans MidtransConfig
 }
 
 type AppConfig struct {
@@ -62,6 +63,15 @@ type InternalConfig struct {
 type SupabaseConfig struct {
 	URL     string `env:"SUPABASE_URL"`
 	AnonKey string `env:"SUPABASE_ANON_KEY"`
+}
+
+type MidtransConfig struct {
+	Env         string `env:"MIDTRANS_ENV" envDefault:"sandbox"`
+	ClientKey   string `env:"MIDTRANS_CLIENT_KEY"`
+	ServerKey   string `env:"MIDTRANS_SERVER_KEY"`
+	SnapBaseURL string `env:"MIDTRANS_SNAP_BASE_URL" envDefault:"https://app.sandbox.midtrans.com"`
+	CoreBaseURL string `env:"MIDTRANS_CORE_BASE_URL" envDefault:"https://api.sandbox.midtrans.com"`
+	WebhookURL  string `env:"MIDTRANS_WEBHOOK_URL"`
 }
 
 func Load() (Config, error) {

@@ -1,14 +1,20 @@
 -- name: CreatePayment :one
 INSERT INTO public.payments (
+    id,
     order_id,
     status,
     amount,
     midtrans_order_id,
     snap_redirect_url
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $5, $6
 )
 RETURNING *;
+
+-- name: GetPaymentByID :one
+SELECT *
+FROM public.payments
+WHERE id = $1;
 
 -- name: GetActivePaymentByOrderID :one
 SELECT *
@@ -26,11 +32,16 @@ ORDER BY created_at DESC;
 
 -- name: UpdatePaymentAfterWebhook :one
 UPDATE public.payments
-SET status = $2,
+SET status = $2::public.payment_status,
     payment_method = $3,
     midtrans_transaction_id = $4,
     snap_redirect_url = CASE
-        WHEN $2 IN ('SUCCESS', 'FAILED', 'EXPIRED', 'REFUNDED') THEN NULL
+        WHEN $2::public.payment_status IN (
+            'SUCCESS'::public.payment_status,
+            'FAILED'::public.payment_status,
+            'EXPIRED'::public.payment_status,
+            'REFUNDED'::public.payment_status
+        ) THEN NULL
         ELSE snap_redirect_url
     END
 WHERE id = $1
