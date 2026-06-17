@@ -43,6 +43,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	orderTxRunner := service.NewOrderTxRunner(dbPool, repo)
 	orderService := service.NewOrderService(repo, orderTxRunner, nil)
 	paymentTxRunner := service.NewPaymentTxRunner(dbPool, repo)
+	reportService := service.NewReportService(repo)
 	midtransClient := midtransintegration.NewClient(
 		cfg.Midtrans.ServerKey,
 		cfg.Midtrans.SnapBaseURL,
@@ -73,6 +74,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 		handler.WithOrderInternalAPIKey(cfg.Internal.APIKey),
 	)
 	paymentHandler := handler.NewPaymentHandler(paymentService, handler.WithPaymentLogger(log))
+	reportHandler := handler.NewReportHandler(reportService)
 	jwtVerifier := supabase.NewJWTVerifier(cfg.Supabase.URL)
 
 	r.GET("/health", healthHandler.Get)
@@ -125,6 +127,12 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Payments.GET("/me", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER), paymentHandler.ListMe)
 	v1Payments.GET("", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), paymentHandler.ListAll)
 	v1Payments.GET("/order/:order_id", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRoleADMIN), paymentHandler.GetByOrder)
+
+	// report
+	v1Reports := v1.Group("/reports")
+	v1Reports.Use(middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN))
+	v1Reports.GET("/revenue", reportHandler.GetRevenue)
+	v1Reports.GET("/products-sold", reportHandler.GetProductsSold)
 
 	// internal
 	v1Internal := v1.Group("/internal")
