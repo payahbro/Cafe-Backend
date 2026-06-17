@@ -30,6 +30,31 @@ FROM public.payments
 WHERE order_id = $1
 ORDER BY created_at DESC;
 
+-- name: ListPayments :many
+SELECT
+    p.id,
+    p.order_id,
+    o.order_number,
+    o.user_id,
+    p.status,
+    p.amount,
+    p.payment_method,
+    p.midtrans_transaction_id,
+    p.snap_redirect_url,
+    p.refund_amount,
+    p.refund_reason,
+    p.refunded_at,
+    p.created_at,
+    p.updated_at
+FROM public.payments p
+JOIN public.orders o ON o.id = p.order_id
+WHERE ($1::uuid IS NULL OR o.user_id = $1)
+  AND ($2::uuid IS NULL OR p.order_id = $2)
+  AND ($3::text = '' OR p.status = NULLIF($3, '')::public.payment_status)
+  AND ($4::text = '' OR p.payment_method = $4)
+ORDER BY p.created_at DESC, p.id DESC
+LIMIT $5 OFFSET $6;
+
 -- name: UpdatePaymentAfterWebhook :one
 UPDATE public.payments
 SET status = $2::public.payment_status,

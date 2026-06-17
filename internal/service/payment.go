@@ -20,6 +20,7 @@ import (
 var (
 	ErrInvalidPaymentOrderID  = errors.New("invalid payment order id")
 	ErrInvalidPaymentID       = errors.New("invalid payment id")
+	ErrInvalidPaymentUserID   = errors.New("invalid payment user id")
 	ErrPaymentForbidden       = errors.New("payment forbidden")
 	ErrPaymentEmailUnverified = errors.New("payment email unverified")
 	ErrPaymentPhoneRequired   = errors.New("payment phone number required")
@@ -30,6 +31,9 @@ var (
 	ErrPaymentNotFound        = errors.New("payment not found")
 	ErrPaymentWebhookInvalid  = errors.New("payment webhook invalid")
 	ErrPaymentOrderSyncFailed = errors.New("payment order sync failed")
+	ErrPaymentInvalidCursor   = errors.New("payment invalid cursor")
+	ErrPaymentInvalidStatus   = errors.New("payment invalid status")
+	ErrPaymentValidation      = errors.New("payment validation error")
 )
 
 type paymentRepository interface {
@@ -44,6 +48,7 @@ type paymentRepository interface {
 	GetPaymentByID(ctx context.Context, id pgtype.UUID) (repository.Payment, error)
 	UpdatePaymentAfterWebhook(ctx context.Context, arg repository.UpdatePaymentAfterWebhookParams) (repository.Payment, error)
 	ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.Payment, error)
+	ListPayments(ctx context.Context, arg repository.ListPaymentsParams) ([]repository.ListPaymentsRow, error)
 }
 
 type paymentTxRunner interface {
@@ -125,9 +130,30 @@ type GetPaymentsByOrderInput struct {
 	ActorRole   string
 }
 
+type ListPaymentsInput struct {
+	ActorUserID   string
+	ActorRole     string
+	Cursor        string
+	Direction     string
+	Limit         int32
+	Status        string
+	OrderID       string
+	UserID        string
+	PaymentMethod string
+}
+
 type PaymentsByOrder struct {
 	OrderID  string
 	Payments []Payment
+}
+
+type PaymentList struct {
+	Items      []Payment
+	NextCursor *string
+	PrevCursor *string
+	Limit      int32
+	HasNext    bool
+	HasPrev    bool
 }
 
 type Payment struct {
@@ -525,6 +551,108 @@ func (s *PaymentService) GetPaymentsByOrder(ctx context.Context, input GetPaymen
 	return &PaymentsByOrder{OrderID: order.ID.String(), Payments: payments}, nil
 }
 
+func (s *PaymentService) ListPayments(ctx context.Context, input ListPaymentsInput) (*PaymentList, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+	actorUUID, err := parseRequiredUUID(strings.TrimSpace(input.ActorUserID))
+	if err != nil {
+		return nil, ErrInvalidPaymentUserID
+	}
+	limit := normalizeOrderLimit(input.Limit)
+	offset, err := decodeOrderCursor(input.Cursor)
+	if err != nil {
+		return nil, ErrPaymentInvalidCursor
+	}
+	if input.Direction == "prev" {
+		offset -= int(limit)
+		if offset < 0 {
+			offset = 0
+		}
+	} else if input.Direction != "" && input.Direction != "next" {
+		return nil, ErrPaymentValidation
+	}
+
+	userFilter := pgtype.UUID{}
+	switch repository.UserRole(input.ActorRole) {
+	case repository.UserRoleCUSTOMER:
+		userFilter = actorUUID
+	case repository.UserRoleADMIN:
+		if strings.TrimSpace(input.UserID) != "" {
+			parsed, err := parseRequiredUUID(input.UserID)
+			if err != nil {
+				return nil, ErrInvalidPaymentUserID
+			}
+			userFilter = parsed
+		}
+	default:
+		return nil, ErrPaymentForbidden
+	}
+
+	orderFilter := pgtype.UUID{}
+	if strings.TrimSpace(input.OrderID) != "" {
+		parsed, err := parseRequiredUUID(input.OrderID)
+		if err != nil {
+			return nil, ErrInvalidPaymentOrderID
+		}
+		orderFilter = parsed
+	}
+
+	statusFilter := ""
+	if strings.TrimSpace(input.Status) != "" {
+		status := repository.PaymentStatus(strings.TrimSpace(input.Status))
+		if !isPaymentStatus(status) {
+			return nil, ErrPaymentInvalidStatus
+		}
+		statusFilter = string(status)
+	}
+
+	rows, err := s.repo.ListPayments(ctx, repository.ListPaymentsParams{
+		UserID:        userFilter,
+		OrderID:       orderFilter,
+		Status:        statusFilter,
+		PaymentMethod: strings.TrimSpace(input.PaymentMethod),
+		Limit:         limit + 1,
+		Offset:        int32(offset),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list payments: %w", err)
+	}
+
+	hasNext := len(rows) > int(limit)
+	if hasNext {
+		rows = rows[:limit]
+	}
+	items := make([]Payment, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, paymentFromListRow(row))
+	}
+
+	var nextCursor *string
+	if hasNext {
+		value := encodeOrderCursor(offset + int(limit))
+		nextCursor = &value
+	}
+	var prevCursor *string
+	if offset > 0 {
+		prevOffset := offset - int(limit)
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		value := encodeOrderCursor(prevOffset)
+		prevCursor = &value
+	}
+
+	return &PaymentList{
+		Items:      items,
+		NextCursor: nextCursor,
+		PrevCursor: prevCursor,
+		Limit:      limit,
+		HasNext:    hasNext,
+		HasPrev:    offset > 0,
+	}, nil
+}
+
 func (s *PaymentService) confirmOrderFromPayment(ctx context.Context, orderID string) error {
 	if s.orderConfirmer == nil {
 		return ErrPaymentOrderSyncFailed
@@ -589,6 +717,15 @@ func isFinalPaymentStatus(status repository.PaymentStatus) bool {
 	}
 }
 
+func isPaymentStatus(status repository.PaymentStatus) bool {
+	switch status {
+	case repository.PaymentStatusPENDINGPAYMENT, repository.PaymentStatusSUCCESS, repository.PaymentStatusFAILED, repository.PaymentStatusEXPIRED, repository.PaymentStatusREFUNDED:
+		return true
+	default:
+		return false
+	}
+}
+
 func parsePaymentIDFromMidtransOrderID(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	prefix := "P-"
@@ -623,6 +760,24 @@ func paymentFromRow(row repository.Payment, order repository.Order) Payment {
 		PaymentID:             row.ID.String(),
 		OrderID:               row.OrderID.String(),
 		OrderNumber:           order.OrderNumber,
+		Status:                string(row.Status),
+		Amount:                row.Amount,
+		PaymentMethod:         textPtr(row.PaymentMethod),
+		MidtransTransactionID: textPtr(row.MidtransTransactionID),
+		SnapRedirectURL:       textPtr(row.SnapRedirectUrl),
+		RefundAmount:          int32Ptr(row.RefundAmount),
+		RefundReason:          textPtr(row.RefundReason),
+		RefundedAt:            timestamptzPtr(row.RefundedAt),
+		CreatedAt:             row.CreatedAt.Time,
+		UpdatedAt:             row.UpdatedAt.Time,
+	}
+}
+
+func paymentFromListRow(row repository.ListPaymentsRow) Payment {
+	return Payment{
+		PaymentID:             row.ID.String(),
+		OrderID:               row.OrderID.String(),
+		OrderNumber:           row.OrderNumber,
 		Status:                string(row.Status),
 		Amount:                row.Amount,
 		PaymentMethod:         textPtr(row.PaymentMethod),

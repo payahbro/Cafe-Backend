@@ -122,6 +122,8 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	v1Payments := v1.Group("/payments")
 	v1Payments.POST("/webhook", paymentHandler.Webhook)
 	v1Payments.POST("/initiate", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER), paymentHandler.Initiate)
+	v1Payments.GET("/me", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER), paymentHandler.ListMe)
+	v1Payments.GET("", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleADMIN), paymentHandler.ListAll)
 	v1Payments.GET("/order/:order_id", middleware.AuthRequired(jwtVerifier, repo), middleware.RequireRoles(repository.UserRoleCUSTOMER, repository.UserRoleADMIN), paymentHandler.GetByOrder)
 
 	// internal

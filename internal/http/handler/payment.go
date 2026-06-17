@@ -26,6 +26,7 @@ type paymentManager interface {
 	InitiatePayment(ctx context.Context, input service.InitiatePaymentInput) (*service.PaymentInitiation, error)
 	HandleWebhook(ctx context.Context, input service.WebhookInput) (*service.WebhookResult, error)
 	GetPaymentsByOrder(ctx context.Context, input service.GetPaymentsByOrderInput) (*service.PaymentsByOrder, error)
+	ListPayments(ctx context.Context, input service.ListPaymentsInput) (*service.PaymentList, error)
 }
 
 type InitiatePaymentRequest struct {
@@ -53,6 +54,20 @@ type PaymentResponse struct {
 	RefundedAt            *time.Time `json:"refunded_at"`
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`
+}
+
+type paymentListEnvelope struct {
+	Success    bool              `json:"success"`
+	Data       []PaymentResponse `json:"data"`
+	Pagination paymentPagination `json:"pagination"`
+}
+
+type paymentPagination struct {
+	NextCursor *string `json:"next_cursor"`
+	PrevCursor *string `json:"prev_cursor"`
+	Limit      int32   `json:"limit"`
+	HasNext    bool    `json:"has_next"`
+	HasPrev    bool    `json:"has_prev"`
 }
 
 type PaymentHandlerOption func(*PaymentHandler)
@@ -167,10 +182,102 @@ func (h *PaymentHandler) GetByOrder(c *gin.Context) {
 	dto.WriteSuccess(c, http.StatusOK, responses[0], "Payment berhasil diambil")
 }
 
+func (h *PaymentHandler) ListMe(c *gin.Context) {
+	h.listPayments(c, true)
+}
+
+func (h *PaymentHandler) ListAll(c *gin.Context) {
+	h.listPayments(c, false)
+}
+
+func (h *PaymentHandler) listPayments(c *gin.Context, ownOnly bool) {
+	if h.paymentService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Payment service unavailable", nil)
+		return
+	}
+
+	user, ok := middleware.GetAuthenticatedUser(c)
+	if !ok {
+		dto.WriteError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ada atau tidak valid", nil)
+		return
+	}
+
+	limit, ok := parseOrderLimit(c.Query("limit"))
+	if !ok {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"limit": "Limit harus berupa angka",
+		})
+		return
+	}
+	direction := strings.TrimSpace(c.Query("direction"))
+	if direction != "" && direction != "next" && direction != "prev" {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"direction": "Direction harus next atau prev",
+		})
+		return
+	}
+	status := strings.TrimSpace(c.Query("status"))
+	if status != "" && !isAllowedValue(status, []string{"PENDING_PAYMENT", "SUCCESS", "FAILED", "EXPIRED", "REFUNDED"}) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"status": "Status tidak valid",
+		})
+		return
+	}
+	orderID := strings.TrimSpace(c.Query("order_id"))
+	if orderID != "" && !isValidUUID(orderID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"order_id": "ID order harus berupa UUID",
+		})
+		return
+	}
+	userID := strings.TrimSpace(c.Query("user_id"))
+	if ownOnly {
+		userID = user.ID
+	} else if userID != "" && !isValidUUID(userID) {
+		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", map[string]string{
+			"user_id": "ID user harus berupa UUID",
+		})
+		return
+	}
+
+	list, err := h.paymentService.ListPayments(c.Request.Context(), service.ListPaymentsInput{
+		ActorUserID:   user.ID,
+		ActorRole:     string(user.Role),
+		Cursor:        strings.TrimSpace(c.Query("cursor")),
+		Direction:     direction,
+		Limit:         limit,
+		Status:        status,
+		OrderID:       orderID,
+		UserID:        userID,
+		PaymentMethod: strings.TrimSpace(c.Query("payment_method")),
+	})
+	if err != nil {
+		h.writePaymentServiceError(c, err)
+		return
+	}
+	if list == nil {
+		list = &service.PaymentList{Limit: limit}
+	}
+
+	c.JSON(http.StatusOK, paymentListEnvelope{
+		Success: true,
+		Data:    paymentResponses(list.Items),
+		Pagination: paymentPagination{
+			NextCursor: list.NextCursor,
+			PrevCursor: list.PrevCursor,
+			Limit:      list.Limit,
+			HasNext:    list.HasNext,
+			HasPrev:    list.HasPrev,
+		},
+	})
+}
+
 func (h *PaymentHandler) writePaymentServiceError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, service.ErrInvalidPaymentOrderID), errors.Is(err, service.ErrInvalidPaymentID), errors.Is(err, service.ErrPaymentWebhookInvalid):
+	case errors.Is(err, service.ErrInvalidPaymentOrderID), errors.Is(err, service.ErrInvalidPaymentID), errors.Is(err, service.ErrInvalidPaymentUserID), errors.Is(err, service.ErrPaymentWebhookInvalid), errors.Is(err, service.ErrPaymentInvalidStatus), errors.Is(err, service.ErrPaymentValidation):
 		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", nil)
+	case errors.Is(err, service.ErrPaymentInvalidCursor):
+		dto.WriteError(c, http.StatusBadRequest, "INVALID_CURSOR", "Cursor tidak valid", nil)
 	case errors.Is(err, service.ErrPaymentForbidden):
 		dto.WriteError(c, http.StatusForbidden, "FORBIDDEN", "Role tidak diizinkan", nil)
 	case errors.Is(err, service.ErrPaymentEmailUnverified):

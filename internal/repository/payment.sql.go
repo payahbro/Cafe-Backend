@@ -202,6 +202,100 @@ func (q *Queries) ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID
 	return items, nil
 }
 
+const listPayments = `-- name: ListPayments :many
+SELECT
+    p.id,
+    p.order_id,
+    o.order_number,
+    o.user_id,
+    p.status,
+    p.amount,
+    p.payment_method,
+    p.midtrans_transaction_id,
+    p.snap_redirect_url,
+    p.refund_amount,
+    p.refund_reason,
+    p.refunded_at,
+    p.created_at,
+    p.updated_at
+FROM public.payments p
+JOIN public.orders o ON o.id = p.order_id
+WHERE ($1::uuid IS NULL OR o.user_id = $1)
+  AND ($2::uuid IS NULL OR p.order_id = $2)
+  AND ($3::text = '' OR p.status = NULLIF($3, '')::public.payment_status)
+  AND ($4::text = '' OR p.payment_method = $4)
+ORDER BY p.created_at DESC, p.id DESC
+LIMIT $5 OFFSET $6
+`
+
+type ListPaymentsParams struct {
+	UserID        pgtype.UUID `json:"user_id"`
+	OrderID       pgtype.UUID `json:"order_id"`
+	Status        string      `json:"status"`
+	PaymentMethod string      `json:"payment_method"`
+	Limit         int32       `json:"limit"`
+	Offset        int32       `json:"offset"`
+}
+
+type ListPaymentsRow struct {
+	ID                    pgtype.UUID        `json:"id"`
+	OrderID               pgtype.UUID        `json:"order_id"`
+	OrderNumber           string             `json:"order_number"`
+	UserID                pgtype.UUID        `json:"user_id"`
+	Status                PaymentStatus      `json:"status"`
+	Amount                int32              `json:"amount"`
+	PaymentMethod         pgtype.Text        `json:"payment_method"`
+	MidtransTransactionID pgtype.Text        `json:"midtrans_transaction_id"`
+	SnapRedirectUrl       pgtype.Text        `json:"snap_redirect_url"`
+	RefundAmount          pgtype.Int4        `json:"refund_amount"`
+	RefundReason          pgtype.Text        `json:"refund_reason"`
+	RefundedAt            pgtype.Timestamptz `json:"refunded_at"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListPayments(ctx context.Context, arg ListPaymentsParams) ([]ListPaymentsRow, error) {
+	rows, err := q.db.Query(ctx, listPayments,
+		arg.UserID,
+		arg.OrderID,
+		arg.Status,
+		arg.PaymentMethod,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPaymentsRow{}
+	for rows.Next() {
+		var i ListPaymentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.OrderNumber,
+			&i.UserID,
+			&i.Status,
+			&i.Amount,
+			&i.PaymentMethod,
+			&i.MidtransTransactionID,
+			&i.SnapRedirectUrl,
+			&i.RefundAmount,
+			&i.RefundReason,
+			&i.RefundedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markPaymentRefunded = `-- name: MarkPaymentRefunded :one
 UPDATE public.payments
 SET status = 'REFUNDED',

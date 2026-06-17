@@ -45,6 +45,7 @@ type Querier interface {
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
 	ListOrders(ctx context.Context, arg ListOrdersParams) ([]ListOrdersRow, error)
 	ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserIDParams) ([]Order, error)
+	ListPayments(ctx context.Context, arg ListPaymentsParams) ([]ListPaymentsRow, error)
 	ListPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	ListProducts(ctx context.Context, arg ListProductsParams) ([]Product, error)
 	LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (Order, error)

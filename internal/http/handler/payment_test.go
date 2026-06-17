@@ -125,17 +125,120 @@ func TestPaymentHandlerGetByOrderReturnsCustomerSinglePayment(t *testing.T) {
 	}
 }
 
+func TestPaymentHandlerListMeReturnsCustomerPayments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	fakeService := &fakePaymentService{
+		list: &service.PaymentList{
+			Items: []service.Payment{
+				{
+					PaymentID:   "77777777-7777-4777-8777-777777777777",
+					OrderID:     "44444444-4444-4444-8444-444444444444",
+					OrderNumber: "ORD-20260616-001",
+					Status:      "SUCCESS",
+					Amount:      68000,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+			},
+			Limit:   10,
+			HasNext: false,
+			HasPrev: false,
+		},
+	}
+	router := gin.New()
+	paymentHandler := NewPaymentHandler(fakeService)
+	router.GET("/payments/me", authenticatedPaymentCustomerMiddleware(), paymentHandler.ListMe)
+
+	req := httptest.NewRequest(http.MethodGet, "/payments/me?limit=10&status=SUCCESS", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !fakeService.listCalled {
+		t.Fatalf("expected list service call")
+	}
+	if fakeService.listInput.UserID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("user filter = %q", fakeService.listInput.UserID)
+	}
+	body := resp.Body.String()
+	for _, want := range []string{
+		`"success":true`,
+		`"payment_id":"77777777-7777-4777-8777-777777777777"`,
+		`"order_number":"ORD-20260616-001"`,
+		`"pagination":`,
+		`"limit":10`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response body missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestPaymentHandlerListAllReturnsAdminPayments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	fakeService := &fakePaymentService{
+		list: &service.PaymentList{
+			Items: []service.Payment{
+				{
+					PaymentID:   "77777777-7777-4777-8777-777777777777",
+					OrderID:     "44444444-4444-4444-8444-444444444444",
+					OrderNumber: "ORD-20260616-001",
+					Status:      "PENDING_PAYMENT",
+					Amount:      68000,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+			},
+			Limit:   20,
+			HasNext: true,
+			HasPrev: false,
+		},
+	}
+	router := gin.New()
+	paymentHandler := NewPaymentHandler(fakeService)
+	router.GET("/payments", authenticatedPaymentAdminMiddleware(), paymentHandler.ListAll)
+
+	req := httptest.NewRequest(http.MethodGet, "/payments?limit=20&user_id=11111111-1111-4111-8111-111111111111&status=PENDING_PAYMENT", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !fakeService.listCalled {
+		t.Fatalf("expected list service call")
+	}
+	if fakeService.listInput.ActorRole != string(repository.UserRoleADMIN) {
+		t.Fatalf("actor role = %q", fakeService.listInput.ActorRole)
+	}
+	if fakeService.listInput.UserID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("user filter = %q", fakeService.listInput.UserID)
+	}
+	if !strings.Contains(resp.Body.String(), `"has_next":true`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
 type fakePaymentService struct {
 	initiation     *service.PaymentInitiation
 	webhookResult  *service.WebhookResult
 	payments       *service.PaymentsByOrder
+	list           *service.PaymentList
 	err            error
 	initiateInput  service.InitiatePaymentInput
 	webhookInput   service.WebhookInput
 	getInput       service.GetPaymentsByOrderInput
+	listInput      service.ListPaymentsInput
 	initiateCalled bool
 	webhookCalled  bool
 	getCalled      bool
+	listCalled     bool
 }
 
 func (f *fakePaymentService) InitiatePayment(_ context.Context, input service.InitiatePaymentInput) (*service.PaymentInitiation, error) {
@@ -165,6 +268,15 @@ func (f *fakePaymentService) GetPaymentsByOrder(_ context.Context, input service
 	return f.payments, nil
 }
 
+func (f *fakePaymentService) ListPayments(_ context.Context, input service.ListPaymentsInput) (*service.PaymentList, error) {
+	f.listCalled = true
+	f.listInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.list, nil
+}
+
 func authenticatedPaymentCustomerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var userID pgtype.UUID
@@ -178,6 +290,23 @@ func authenticatedPaymentCustomerMiddleware() gin.HandlerFunc {
 			IsVerified:  true,
 			IsActive:    true,
 			PhoneNumber: "+628123456789",
+		})
+		c.Next()
+	}
+}
+
+func authenticatedPaymentAdminMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var userID pgtype.UUID
+		_ = userID.Scan("99999999-9999-4999-8999-999999999999")
+		c.Set("authenticated_user", middleware.AuthenticatedUser{
+			ID:         "99999999-9999-4999-8999-999999999999",
+			UUID:       userID,
+			Email:      "admin@example.test",
+			FullName:   "Admin",
+			Role:       repository.UserRoleADMIN,
+			IsVerified: true,
+			IsActive:   true,
 		})
 		c.Next()
 	}

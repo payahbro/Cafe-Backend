@@ -259,6 +259,45 @@ func TestPaymentServiceGetPaymentsByOrderRestrictsCustomerAndReturnsNewest(t *te
 	}
 }
 
+func TestPaymentServiceListPaymentsForCustomerForcesOwnUserFilter(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	userID := "11111111-1111-4111-8111-111111111111"
+	orderID := "44444444-4444-4444-8444-444444444444"
+	repo := &fakePaymentRepo{
+		paymentList: []repository.ListPaymentsRow{
+			paymentListRow(t, "77777777-7777-4777-8777-777777777777", orderID, "ORD-20260616-001", userID, "SUCCESS", 68000, "qris", now),
+		},
+	}
+	service := NewPaymentService(repo, nil, nil, nil, nil, PaymentServiceOptions{})
+
+	result, err := service.ListPayments(context.Background(), ListPaymentsInput{
+		ActorUserID: userID,
+		ActorRole:   string(repository.UserRoleCUSTOMER),
+		UserID:      "99999999-9999-4999-8999-999999999999",
+		Status:      "SUCCESS",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("list payments: %v", err)
+	}
+
+	if !repo.listPaymentsCalled {
+		t.Fatalf("expected repository list payments call")
+	}
+	if repo.listPaymentsArg.UserID.String() != userID {
+		t.Fatalf("user filter = %s", repo.listPaymentsArg.UserID.String())
+	}
+	if repo.listPaymentsArg.Status != "SUCCESS" {
+		t.Fatalf("status filter = %q", repo.listPaymentsArg.Status)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items len = %d", len(result.Items))
+	}
+	if result.Items[0].OrderNumber != "ORD-20260616-001" || result.Items[0].PaymentMethod == nil || *result.Items[0].PaymentMethod != "qris" {
+		t.Fatalf("payment item = %+v", result.Items[0])
+	}
+}
+
 type fakePaymentTxRunner struct {
 	repo paymentRepository
 }
@@ -277,16 +316,20 @@ type fakePaymentRepo struct {
 	createdPayment          repository.Payment
 	updatedOrder            repository.Order
 	payments                []repository.Payment
+	paymentList             []repository.ListPaymentsRow
 	createArg               repository.CreatePaymentParams
 	updateArg               repository.UpdatePaymentAfterWebhookParams
 	updateOrderStatusArg    repository.UpdateOrderStatusParams
+	listPaymentsArg         repository.ListPaymentsParams
 	activePaymentErr        error
 	orderErr                error
 	paymentErr              error
 	paymentsErr             error
+	listPaymentsErr         error
 	createCalled            bool
 	updateCalled            bool
 	getPaymentCalled        bool
+	listPaymentsCalled      bool
 	incrementStockCalled    bool
 	updateOrderStatusCalled bool
 }
@@ -362,6 +405,15 @@ func (f *fakePaymentRepo) ListPaymentsByOrderID(ctx context.Context, orderID pgt
 		return nil, f.paymentsErr
 	}
 	return f.payments, nil
+}
+
+func (f *fakePaymentRepo) ListPayments(ctx context.Context, arg repository.ListPaymentsParams) ([]repository.ListPaymentsRow, error) {
+	f.listPaymentsCalled = true
+	f.listPaymentsArg = arg
+	if f.listPaymentsErr != nil {
+		return nil, f.listPaymentsErr
+	}
+	return f.paymentList, nil
 }
 
 type fakeSnapClient struct {
@@ -454,6 +506,26 @@ func paymentRow(t *testing.T, paymentID, orderID, status string, amount int32, m
 		SnapRedirectUrl: pgtype.Text{String: snapURL, Valid: snapURL != ""},
 		CreatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
 		UpdatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
+	}
+}
+
+func paymentListRow(t *testing.T, paymentID, orderID, orderNumber, userID, status string, amount int32, method string, createdAt time.Time) repository.ListPaymentsRow {
+	t.Helper()
+	return repository.ListPaymentsRow{
+		ID:                    mustUUIDForPayment(t, paymentID),
+		OrderID:               mustUUIDForPayment(t, orderID),
+		OrderNumber:           orderNumber,
+		UserID:                mustUUIDForPayment(t, userID),
+		Status:                repository.PaymentStatus(status),
+		Amount:                amount,
+		PaymentMethod:         pgtype.Text{String: method, Valid: method != ""},
+		MidtransTransactionID: pgtype.Text{},
+		SnapRedirectUrl:       pgtype.Text{},
+		RefundAmount:          pgtype.Int4{},
+		RefundReason:          pgtype.Text{},
+		RefundedAt:            pgtype.Timestamptz{},
+		CreatedAt:             pgtype.Timestamptz{Time: createdAt, Valid: true},
+		UpdatedAt:             pgtype.Timestamptz{Time: createdAt, Valid: true},
 	}
 }
 
