@@ -26,6 +26,7 @@ func TestOrderHandlerCheckoutReturnsCreatedOrder(t *testing.T) {
 			OrderNumber: "ORD-20260614-001",
 			UserID:      "11111111-1111-4111-8111-111111111111",
 			Status:      "PENDING",
+			TableNumber: "12",
 			Notes:       stringPtrForHandlerOrder("Tolong bungkus rapi"),
 			TotalAmount: 50000,
 			ExpiresAt:   timePtrForHandlerOrder(now.Add(15 * time.Minute)),
@@ -48,7 +49,7 @@ func TestOrderHandlerCheckoutReturnsCreatedOrder(t *testing.T) {
 	orderHandler := NewOrderHandler(fakeService)
 	router.POST("/orders/checkout", authenticatedOrderCustomerMiddleware(), orderHandler.Checkout)
 
-	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"notes":"Tolong bungkus rapi","items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{"temperature":"iced","sizes":"medium"}}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"table_number":"12","notes":"Tolong bungkus rapi","items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{"temperature":"iced","sizes":"medium"}}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -65,10 +66,14 @@ func TestOrderHandlerCheckoutReturnsCreatedOrder(t *testing.T) {
 	if !fakeService.checkoutInput.IsVerified || fakeService.checkoutInput.PhoneNumber == "" {
 		t.Fatalf("preconditions not passed: %+v", fakeService.checkoutInput)
 	}
+	if fakeService.checkoutInput.TableNumber != "12" {
+		t.Fatalf("table number = %q", fakeService.checkoutInput.TableNumber)
+	}
 	body := resp.Body.String()
 	for _, want := range []string{
 		`"success":true`,
 		`"order_number":"ORD-20260614-001"`,
+		`"table_number":"12"`,
 		`"total_amount":50000`,
 		`"temperature":"iced"`,
 		`"message":"Order berhasil dibuat"`,
@@ -87,7 +92,7 @@ func TestOrderHandlerCheckoutRejectsEmptyItems(t *testing.T) {
 	orderHandler := NewOrderHandler(fakeService)
 	router.POST("/orders/checkout", authenticatedOrderCustomerMiddleware(), orderHandler.Checkout)
 
-	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"items":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"table_number":"12","items":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -103,6 +108,30 @@ func TestOrderHandlerCheckoutRejectsEmptyItems(t *testing.T) {
 	}
 }
 
+func TestOrderHandlerCheckoutRejectsEmptyTableNumber(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fakeService := &fakeOrderService{}
+	router := gin.New()
+	orderHandler := NewOrderHandler(fakeService)
+	router.POST("/orders/checkout", authenticatedOrderCustomerMiddleware(), orderHandler.Checkout)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if fakeService.checkoutCalled {
+		t.Fatalf("service should not be called for missing table number")
+	}
+	if !strings.Contains(resp.Body.String(), `"table_number"`) {
+		t.Fatalf("response body = %s", resp.Body.String())
+	}
+}
+
 func TestOrderHandlerCheckoutMapsPhoneRequired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -111,7 +140,7 @@ func TestOrderHandlerCheckoutMapsPhoneRequired(t *testing.T) {
 	orderHandler := NewOrderHandler(fakeService)
 	router.POST("/orders/checkout", authenticatedOrderCustomerMiddleware(), orderHandler.Checkout)
 
-	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{}}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"table_number":"12","items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{}}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -132,7 +161,7 @@ func TestOrderHandlerCheckoutMapsCartItemAlreadyPending(t *testing.T) {
 	orderHandler := NewOrderHandler(fakeService)
 	router.POST("/orders/checkout", authenticatedOrderCustomerMiddleware(), orderHandler.Checkout)
 
-	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{}}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/orders/checkout", strings.NewReader(`{"table_number":"12","items":[{"cart_item_id":"22222222-2222-4222-8222-222222222222","attributes":{}}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -155,6 +184,7 @@ func TestOrderHandlerListOrdersReturnsPaginationEnvelope(t *testing.T) {
 					ID:          "44444444-4444-4444-8444-444444444444",
 					OrderNumber: "ORD-20260614-001",
 					Status:      "PENDING",
+					TableNumber: "12",
 					TotalAmount: 50000,
 					CreatedAt:   time.Date(2026, 6, 14, 3, 0, 0, 0, time.UTC),
 				},
@@ -182,6 +212,7 @@ func TestOrderHandlerListOrdersReturnsPaginationEnvelope(t *testing.T) {
 	for _, want := range []string{
 		`"success":true`,
 		`"order_number":"ORD-20260614-001"`,
+		`"table_number":"12"`,
 		`"pagination":`,
 		`"limit":10`,
 	} {
@@ -200,6 +231,7 @@ func TestOrderHandlerGetOrderReturnsDetail(t *testing.T) {
 			OrderNumber: "ORD-20260614-001",
 			UserID:      "11111111-1111-4111-8111-111111111111",
 			Status:      "PENDING",
+			TableNumber: "12",
 			TotalAmount: 50000,
 			CreatedAt:   time.Date(2026, 6, 14, 3, 0, 0, 0, time.UTC),
 			UpdatedAt:   time.Date(2026, 6, 14, 3, 0, 0, 0, time.UTC),
@@ -348,22 +380,22 @@ func TestOrderHandlerInternalUpdateStatusRejectsMissingAPIKey(t *testing.T) {
 }
 
 type fakeOrderService struct {
-	order         *service.Order
-	list          *service.OrderList
-	statusUpdate  *service.OrderStatusUpdate
-	internalResult *service.InternalConfirmOrderResult
-	err           error
-	checkoutInput service.CheckoutInput
-	listInput     service.ListOrdersInput
-	getInput      service.GetOrderInput
-	cancelInput   service.CancelOrderInput
-	updateStatusInput service.UpdateOrderStatusInput
-	internalInput service.InternalConfirmOrderInput
-	checkoutCalled bool
-	listCalled     bool
-	getCalled      bool
-	cancelCalled   bool
-	updateStatusCalled bool
+	order                 *service.Order
+	list                  *service.OrderList
+	statusUpdate          *service.OrderStatusUpdate
+	internalResult        *service.InternalConfirmOrderResult
+	err                   error
+	checkoutInput         service.CheckoutInput
+	listInput             service.ListOrdersInput
+	getInput              service.GetOrderInput
+	cancelInput           service.CancelOrderInput
+	updateStatusInput     service.UpdateOrderStatusInput
+	internalInput         service.InternalConfirmOrderInput
+	checkoutCalled        bool
+	listCalled            bool
+	getCalled             bool
+	cancelCalled          bool
+	updateStatusCalled    bool
 	internalConfirmCalled bool
 }
 
@@ -452,9 +484,9 @@ func authenticatedOrderPegawaiMiddleware() gin.HandlerFunc {
 }
 
 type fakeOrderCartClearer struct {
-	itemIDs []string
+	itemIDs     []string
 	clearCalled bool
-	err error
+	err         error
 }
 
 func (f *fakeOrderCartClearer) ClearItemsByIDs(_ context.Context, itemIDs []string) error {

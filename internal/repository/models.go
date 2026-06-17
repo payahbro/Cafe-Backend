@@ -295,6 +295,7 @@ type Order struct {
 	OrderNumber string             `json:"order_number"`
 	UserID      pgtype.UUID        `json:"user_id"`
 	Status      OrderStatus        `json:"status"`
+	TableNumber pgtype.Text        `json:"table_number"`
 	Notes       pgtype.Text        `json:"notes"`
 	TotalAmount int32              `json:"total_amount"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`

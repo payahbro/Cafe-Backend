@@ -77,6 +77,7 @@ type CheckoutInput struct {
 	UserID      string
 	IsVerified  bool
 	PhoneNumber string
+	TableNumber string
 	Notes       *string
 	Items       []CheckoutItemInput
 }
@@ -135,6 +136,7 @@ type Order struct {
 	OrderNumber string
 	UserID      string
 	Status      string
+	TableNumber string
 	Notes       *string
 	TotalAmount int32
 	ExpiresAt   *time.Time
@@ -157,6 +159,7 @@ type OrderSummary struct {
 	ID          string
 	OrderNumber string
 	Status      string
+	TableNumber string
 	TotalAmount int32
 	CreatedAt   time.Time
 }
@@ -212,6 +215,10 @@ func (s *OrderService) Checkout(ctx context.Context, input CheckoutInput) (*Orde
 	}
 	if strings.TrimSpace(input.PhoneNumber) == "" {
 		return nil, ErrOrderPhoneNumberRequired
+	}
+	tableNumber := strings.TrimSpace(input.TableNumber)
+	if tableNumber == "" || len(tableNumber) > 20 {
+		return nil, ErrOrderValidation
 	}
 	notes := normalizeOptionalString(input.Notes)
 	if notes != nil && len(*notes) > 255 {
@@ -326,6 +333,7 @@ func (s *OrderService) Checkout(ctx context.Context, input CheckoutInput) (*Orde
 			OrderNumber: orderNumber,
 			UserID:      userUUID,
 			Status:      repository.OrderStatusPENDING,
+			TableNumber: pgtype.Text{String: tableNumber, Valid: true},
 			Notes:       optionalText(notes),
 			TotalAmount: totalAmount,
 			ExpiresAt:   pgtype.Timestamptz{Time: now.Add(15 * time.Minute), Valid: true},
@@ -912,6 +920,7 @@ func orderFromRows(order repository.Order, items []repository.OrderItem) *Order 
 		OrderNumber: order.OrderNumber,
 		UserID:      order.UserID.String(),
 		Status:      string(order.Status),
+		TableNumber: textOrEmpty(order.TableNumber),
 		Notes:       textPtr(order.Notes),
 		TotalAmount: order.TotalAmount,
 		ExpiresAt:   timestamptzPtr(order.ExpiresAt),
@@ -938,6 +947,7 @@ func orderSummaryFromRow(row repository.ListOrdersRow) OrderSummary {
 		ID:          row.ID.String(),
 		OrderNumber: row.OrderNumber,
 		Status:      string(row.Status),
+		TableNumber: textOrEmpty(row.TableNumber),
 		TotalAmount: row.TotalAmount,
 		CreatedAt:   row.CreatedAt.Time,
 	}

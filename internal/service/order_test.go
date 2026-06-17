@@ -31,6 +31,7 @@ func TestOrderServiceCheckoutCreatesPendingOrderWithSnapshotsAndDefaults(t *test
 			OrderNumber: "ORD-20260614-001",
 			UserID:      mustUUIDForOrder(t, userID),
 			Status:      repository.OrderStatusPENDING,
+			TableNumber: pgtype.Text{String: "12", Valid: true},
 			Notes:       pgtype.Text{String: "Tolong bungkus rapi", Valid: true},
 			TotalAmount: 50000,
 			ExpiresAt:   pgtype.Timestamptz{Time: now.Add(15 * time.Minute), Valid: true},
@@ -58,6 +59,7 @@ func TestOrderServiceCheckoutCreatesPendingOrderWithSnapshotsAndDefaults(t *test
 		UserID:      userID,
 		IsVerified:  true,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Notes:       stringPtrForOrder("Tolong bungkus rapi"),
 		Items: []CheckoutItemInput{
 			{
@@ -78,6 +80,12 @@ func TestOrderServiceCheckoutCreatesPendingOrderWithSnapshotsAndDefaults(t *test
 	}
 	if order.TotalAmount != 50000 {
 		t.Fatalf("total amount = %d", order.TotalAmount)
+	}
+	if order.TableNumber != "12" {
+		t.Fatalf("table number = %q", order.TableNumber)
+	}
+	if txRepo.createOrderArg.TableNumber.String != "12" {
+		t.Fatalf("created table number = %q", txRepo.createOrderArg.TableNumber.String)
 	}
 	if len(order.Items) != 1 {
 		t.Fatalf("items len = %d", len(order.Items))
@@ -101,11 +109,29 @@ func TestOrderServiceCheckoutRejectsUnverifiedCustomer(t *testing.T) {
 		UserID:      "11111111-1111-4111-8111-111111111111",
 		IsVerified:  false,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Items: []CheckoutItemInput{{
 			CartItemID: "22222222-2222-4222-8222-222222222222",
 		}},
 	})
 	if !errors.Is(err, ErrOrderEmailUnverified) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOrderServiceCheckoutRejectsEmptyTableNumber(t *testing.T) {
+	service := NewOrderService(&fakeOrderRepo{}, &fakeOrderTxRunner{repo: &fakeOrderRepo{}}, time.Now)
+
+	_, err := service.Checkout(context.Background(), CheckoutInput{
+		UserID:      "11111111-1111-4111-8111-111111111111",
+		IsVerified:  true,
+		PhoneNumber: "+628123456789",
+		TableNumber: " ",
+		Items: []CheckoutItemInput{{
+			CartItemID: "22222222-2222-4222-8222-222222222222",
+		}},
+	})
+	if !errors.Is(err, ErrOrderValidation) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -125,6 +151,7 @@ func TestOrderServiceCheckoutRejectsMissingRequiredCoffeeAttribute(t *testing.T)
 		UserID:      userID,
 		IsVerified:  true,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Items: []CheckoutItemInput{{
 			CartItemID: cartItemID,
 			Attributes: map[string]string{
@@ -147,6 +174,7 @@ func TestOrderServiceCheckoutReturnsCartItemNotFoundWhenAnyItemMissing(t *testin
 		UserID:      "11111111-1111-4111-8111-111111111111",
 		IsVerified:  true,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Items: []CheckoutItemInput{{
 			CartItemID: "22222222-2222-4222-8222-222222222222",
 		}},
@@ -172,6 +200,7 @@ func TestOrderServiceCheckoutRejectsCartItemAlreadyInPendingOrder(t *testing.T) 
 		UserID:      userID,
 		IsVerified:  true,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Items: []CheckoutItemInput{{
 			CartItemID: cartItemID,
 			Attributes: map[string]string{
@@ -231,6 +260,7 @@ func TestOrderServiceCheckoutCancelsExpiredPendingOrderBeforePendingCheck(t *tes
 		UserID:      userID,
 		IsVerified:  true,
 		PhoneNumber: "+628123456789",
+		TableNumber: "12",
 		Items: []CheckoutItemInput{{
 			CartItemID: cartItemID,
 			Attributes: map[string]string{

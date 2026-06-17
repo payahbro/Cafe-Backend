@@ -16,19 +16,21 @@ INSERT INTO public.orders (
     order_number,
     user_id,
     status,
+    table_number,
     notes,
     total_amount,
     expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+RETURNING id, order_number, user_id, status, table_number, notes, total_amount, expires_at, created_at, updated_at
 `
 
 type CreateOrderParams struct {
 	OrderNumber string             `json:"order_number"`
 	UserID      pgtype.UUID        `json:"user_id"`
 	Status      OrderStatus        `json:"status"`
+	TableNumber pgtype.Text        `json:"table_number"`
 	Notes       pgtype.Text        `json:"notes"`
 	TotalAmount int32              `json:"total_amount"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
@@ -39,6 +41,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order
 		arg.OrderNumber,
 		arg.UserID,
 		arg.Status,
+		arg.TableNumber,
 		arg.Notes,
 		arg.TotalAmount,
 		arg.ExpiresAt,
@@ -49,6 +52,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order
 		&i.OrderNumber,
 		&i.UserID,
 		&i.Status,
+		&i.TableNumber,
 		&i.Notes,
 		&i.TotalAmount,
 		&i.ExpiresAt,
@@ -150,7 +154,7 @@ func (q *Queries) CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg C
 }
 
 const listExpiredPendingOrdersByCartItemIDs = `-- name: ListExpiredPendingOrdersByCartItemIDs :many
-SELECT DISTINCT o.id, o.order_number, o.user_id, o.status, o.notes, o.total_amount, o.expires_at, o.created_at, o.updated_at
+SELECT DISTINCT o.id, o.order_number, o.user_id, o.status, o.table_number, o.notes, o.total_amount, o.expires_at, o.created_at, o.updated_at
 FROM public.orders o
 JOIN public.order_items oi ON oi.order_id = o.id
 WHERE o.user_id = $1
@@ -181,6 +185,7 @@ func (q *Queries) ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg
 			&i.OrderNumber,
 			&i.UserID,
 			&i.Status,
+			&i.TableNumber,
 			&i.Notes,
 			&i.TotalAmount,
 			&i.ExpiresAt,
@@ -249,7 +254,7 @@ func (q *Queries) LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) 
 }
 
 const lockOrderByIDForUpdate = `-- name: LockOrderByIDForUpdate :one
-SELECT id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+SELECT id, order_number, user_id, status, table_number, notes, total_amount, expires_at, created_at, updated_at
 FROM public.orders
 WHERE id = $1
 FOR UPDATE
@@ -263,6 +268,7 @@ func (q *Queries) LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (O
 		&i.OrderNumber,
 		&i.UserID,
 		&i.Status,
+		&i.TableNumber,
 		&i.Notes,
 		&i.TotalAmount,
 		&i.ExpiresAt,
@@ -430,7 +436,7 @@ func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams
 }
 
 const getOrderByID = `-- name: GetOrderByID :one
-SELECT id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+SELECT id, order_number, user_id, status, table_number, notes, total_amount, expires_at, created_at, updated_at
 FROM public.orders
 WHERE id = $1
 `
@@ -443,6 +449,7 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, erro
 		&i.OrderNumber,
 		&i.UserID,
 		&i.Status,
+		&i.TableNumber,
 		&i.Notes,
 		&i.TotalAmount,
 		&i.ExpiresAt,
@@ -491,7 +498,7 @@ func (q *Queries) ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UU
 }
 
 const listOrdersByUserID = `-- name: ListOrdersByUserID :many
-SELECT id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+SELECT id, order_number, user_id, status, table_number, notes, total_amount, expires_at, created_at, updated_at
 FROM public.orders
 WHERE user_id = $1
 ORDER BY created_at DESC
@@ -518,6 +525,7 @@ func (q *Queries) ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserID
 			&i.OrderNumber,
 			&i.UserID,
 			&i.Status,
+			&i.TableNumber,
 			&i.Notes,
 			&i.TotalAmount,
 			&i.ExpiresAt,
@@ -540,6 +548,7 @@ SELECT
     order_number,
     user_id,
     status,
+    table_number,
     total_amount,
     created_at
 FROM public.orders
@@ -561,6 +570,7 @@ type ListOrdersRow struct {
 	OrderNumber string             `json:"order_number"`
 	UserID      pgtype.UUID        `json:"user_id"`
 	Status      OrderStatus        `json:"status"`
+	TableNumber pgtype.Text        `json:"table_number"`
 	TotalAmount int32              `json:"total_amount"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
@@ -584,6 +594,7 @@ func (q *Queries) ListOrders(ctx context.Context, arg ListOrdersParams) ([]ListO
 			&i.OrderNumber,
 			&i.UserID,
 			&i.Status,
+			&i.TableNumber,
 			&i.TotalAmount,
 			&i.CreatedAt,
 		); err != nil {
@@ -602,7 +613,7 @@ UPDATE public.orders
 SET status = $2,
     expires_at = CASE WHEN $2 = 'PENDING'::public.order_status THEN expires_at ELSE NULL END
 WHERE id = $1
-RETURNING id, order_number, user_id, status, notes, total_amount, expires_at, created_at, updated_at
+RETURNING id, order_number, user_id, status, table_number, notes, total_amount, expires_at, created_at, updated_at
 `
 
 type UpdateOrderStatusParams struct {
@@ -618,6 +629,7 @@ func (q *Queries) UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusPa
 		&i.OrderNumber,
 		&i.UserID,
 		&i.Status,
+		&i.TableNumber,
 		&i.Notes,
 		&i.TotalAmount,
 		&i.ExpiresAt,

@@ -3,11 +3,12 @@ INSERT INTO public.orders (
     order_number,
     user_id,
     status,
+    table_number,
     notes,
     total_amount,
     expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 )
 RETURNING *;
 
@@ -122,6 +123,7 @@ SELECT
     order_number,
     user_id,
     status,
+    table_number,
     total_amount,
     created_at
 FROM public.orders

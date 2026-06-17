@@ -17,9 +17,9 @@ import (
 )
 
 type OrderHandler struct {
-	orderService    orderManager
-	cartClearer     orderCartClearer
-	internalAPIKey  string
+	orderService   orderManager
+	cartClearer    orderCartClearer
+	internalAPIKey string
 }
 
 type orderManager interface {
@@ -50,8 +50,9 @@ func WithOrderInternalAPIKey(apiKey string) OrderHandlerOption {
 }
 
 type CheckoutOrderRequest struct {
-	Notes *string                    `json:"notes"`
-	Items []CheckoutOrderItemRequest `json:"items"`
+	TableNumber string                     `json:"table_number"`
+	Notes       *string                    `json:"notes"`
+	Items       []CheckoutOrderItemRequest `json:"items"`
 }
 
 type CheckoutOrderItemRequest struct {
@@ -64,6 +65,7 @@ type OrderDetailResponse struct {
 	OrderNumber string              `json:"order_number"`
 	UserID      string              `json:"user_id"`
 	Status      string              `json:"status"`
+	TableNumber string              `json:"table_number"`
 	Notes       *string             `json:"notes"`
 	TotalAmount int32               `json:"total_amount"`
 	ExpiresAt   *time.Time          `json:"expires_at"`
@@ -86,6 +88,7 @@ type OrderSummaryResponse struct {
 	OrderID     string    `json:"order_id"`
 	OrderNumber string    `json:"order_number"`
 	Status      string    `json:"status"`
+	TableNumber string    `json:"table_number"`
 	TotalAmount int32     `json:"total_amount"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -159,6 +162,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		UserID:      user.ID,
 		IsVerified:  user.IsVerified,
 		PhoneNumber: user.PhoneNumber,
+		TableNumber: req.TableNumber,
 		Notes:       req.Notes,
 		Items:       items,
 	})
@@ -398,6 +402,7 @@ func (h *OrderHandler) InternalUpdateStatus(c *gin.Context) {
 }
 
 func normalizeCheckoutOrderRequest(req CheckoutOrderRequest) CheckoutOrderRequest {
+	req.TableNumber = strings.TrimSpace(req.TableNumber)
 	if req.Notes != nil {
 		notes := strings.TrimSpace(*req.Notes)
 		req.Notes = &notes
@@ -416,6 +421,11 @@ func normalizeCheckoutOrderRequest(req CheckoutOrderRequest) CheckoutOrderReques
 
 func validateCheckoutOrderRequest(req CheckoutOrderRequest) map[string]string {
 	validationErrors := make(map[string]string)
+	if req.TableNumber == "" {
+		validationErrors["table_number"] = "Nomor meja wajib diisi"
+	} else if len(req.TableNumber) > 20 {
+		validationErrors["table_number"] = "Nomor meja maksimal 20 karakter"
+	}
 	if req.Notes != nil && len(*req.Notes) > 255 {
 		validationErrors["notes"] = "Notes maksimal 255 karakter"
 	}
@@ -495,6 +505,7 @@ func orderDetailResponse(order *service.Order) OrderDetailResponse {
 		OrderNumber: order.OrderNumber,
 		UserID:      order.UserID,
 		Status:      order.Status,
+		TableNumber: order.TableNumber,
 		Notes:       order.Notes,
 		TotalAmount: order.TotalAmount,
 		ExpiresAt:   order.ExpiresAt,
@@ -527,6 +538,7 @@ func orderSummaryResponses(items []service.OrderSummary) []OrderSummaryResponse 
 			OrderID:     item.ID,
 			OrderNumber: item.OrderNumber,
 			Status:      item.Status,
+			TableNumber: item.TableNumber,
 			TotalAmount: item.TotalAmount,
 			CreatedAt:   item.CreatedAt,
 		})
