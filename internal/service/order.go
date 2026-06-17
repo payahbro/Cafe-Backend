@@ -18,24 +18,24 @@ import (
 )
 
 var (
-	ErrInvalidOrderUserID        = errors.New("invalid order user id")
-	ErrInvalidOrderID            = errors.New("invalid order id")
-	ErrInvalidOrderCartItemID    = errors.New("invalid order cart item id")
-	ErrOrderValidation           = errors.New("order validation error")
-	ErrOrderEmailUnverified      = errors.New("order email unverified")
-	ErrOrderPhoneNumberRequired  = errors.New("order phone number required")
-	ErrOrderForbidden            = errors.New("order forbidden")
-	ErrOrderInvalidStatus        = errors.New("order invalid status")
-	ErrOrderInvalidCursor        = errors.New("order invalid cursor")
-	ErrOrderCartItemNotFound     = errors.New("order cart item not found")
-	ErrOrderCartItemAlreadyPending = errors.New("order cart item already pending")
-	ErrOrderProductNotFound      = errors.New("order product not found")
-	ErrOrderProductUnavailable   = errors.New("order product unavailable")
-	ErrOrderProductOutOfStock    = errors.New("order product out of stock")
-	ErrOrderInsufficientStock    = errors.New("order insufficient stock")
-	ErrOrderNotFound             = errors.New("order not found")
-	ErrOrderNotCancellable       = errors.New("order not cancellable")
-	ErrOrderAlreadyCancelled     = errors.New("order already cancelled")
+	ErrInvalidOrderUserID           = errors.New("invalid order user id")
+	ErrInvalidOrderID               = errors.New("invalid order id")
+	ErrInvalidOrderCartItemID       = errors.New("invalid order cart item id")
+	ErrOrderValidation              = errors.New("order validation error")
+	ErrOrderEmailUnverified         = errors.New("order email unverified")
+	ErrOrderPhoneNumberRequired     = errors.New("order phone number required")
+	ErrOrderForbidden               = errors.New("order forbidden")
+	ErrOrderInvalidStatus           = errors.New("order invalid status")
+	ErrOrderInvalidCursor           = errors.New("order invalid cursor")
+	ErrOrderCartItemNotFound        = errors.New("order cart item not found")
+	ErrOrderCartItemAlreadyPending  = errors.New("order cart item already pending")
+	ErrOrderProductNotFound         = errors.New("order product not found")
+	ErrOrderProductUnavailable      = errors.New("order product unavailable")
+	ErrOrderProductOutOfStock       = errors.New("order product out of stock")
+	ErrOrderInsufficientStock       = errors.New("order insufficient stock")
+	ErrOrderNotFound                = errors.New("order not found")
+	ErrOrderNotCancellable          = errors.New("order not cancellable")
+	ErrOrderAlreadyCancelled        = errors.New("order already cancelled")
 	ErrOrderInvalidStatusTransition = errors.New("order invalid status transition")
 )
 
@@ -51,6 +51,7 @@ type orderRepository interface {
 	IncrementProductTotalSold(ctx context.Context, arg repository.IncrementProductTotalSoldParams) (repository.Product, error)
 	CreateOrder(ctx context.Context, arg repository.CreateOrderParams) (repository.Order, error)
 	CreateOrderItem(ctx context.Context, arg repository.CreateOrderItemParams) (repository.OrderItem, error)
+	ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg repository.ListExpiredPendingOrdersByCartItemIDsParams) ([]repository.Order, error)
 	ListOrders(ctx context.Context, arg repository.ListOrdersParams) ([]repository.ListOrdersRow, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (repository.Order, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.OrderItem, error)
@@ -81,8 +82,8 @@ type CheckoutInput struct {
 }
 
 type CheckoutItemInput struct {
-	CartItemID  string
-	Attributes  map[string]string
+	CartItemID string
+	Attributes map[string]string
 }
 
 type ListOrdersInput struct {
@@ -170,9 +171,9 @@ type OrderList struct {
 }
 
 type checkoutPreparedItem struct {
-	row        repository.ListCheckoutCartItemsForUserRow
-	attrs      []byte
-	subtotal   int32
+	row      repository.ListCheckoutCartItemsForUserRow
+	attrs    []byte
+	subtotal int32
 }
 
 func NewOrderService(repo orderRepository, txRunner orderTxRunner, now func() time.Time) *OrderService {
@@ -252,6 +253,18 @@ func (s *OrderService) Checkout(ctx context.Context, input CheckoutInput) (*Orde
 		}
 		if len(rows) != len(itemIDs) {
 			return ErrOrderCartItemNotFound
+		}
+
+		expiredOrders, err := repo.ListExpiredPendingOrdersByCartItemIDs(ctx, repository.ListExpiredPendingOrdersByCartItemIDsParams{
+			UserID:      userUUID,
+			ExpiresAt:   pgtype.Timestamptz{Time: s.now(), Valid: true},
+			CartItemIds: itemIDs,
+		})
+		if err != nil {
+			return fmt.Errorf("list expired pending orders: %w", err)
+		}
+		if err := cancelExpiredPendingOrders(ctx, repo, expiredOrders, s.now()); err != nil {
+			return err
 		}
 
 		pendingCount, err := repo.CountPendingOrderItemsByCartItemIDs(ctx, repository.CountPendingOrderItemsByCartItemIDsParams{
@@ -714,6 +727,47 @@ func (s *OrderService) ConfirmOrderFromPayment(ctx context.Context, input Intern
 	}
 
 	return &result, nil
+}
+
+func cancelExpiredPendingOrders(ctx context.Context, repo orderRepository, orders []repository.Order, now time.Time) error {
+	for _, expired := range orders {
+		order, err := repo.LockOrderByIDForUpdate(ctx, expired.ID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return fmt.Errorf("lock expired order: %w", err)
+		}
+		if order.Status != repository.OrderStatusPENDING {
+			continue
+		}
+		if !order.ExpiresAt.Valid || now.Before(order.ExpiresAt.Time) {
+			continue
+		}
+
+		items, err := repo.ListOrderItemsByOrderID(ctx, order.ID)
+		if err != nil {
+			return fmt.Errorf("list expired order items: %w", err)
+		}
+		for _, item := range items {
+			if _, err := repo.LockProductByIDForUpdate(ctx, item.ProductID); err != nil {
+				return fmt.Errorf("lock expired order product: %w", err)
+			}
+			if _, err := repo.IncrementProductStock(ctx, repository.IncrementProductStockParams{
+				ID:       item.ProductID,
+				Quantity: item.Quantity,
+			}); err != nil {
+				return fmt.Errorf("restore expired order stock: %w", err)
+			}
+		}
+		if _, err := repo.UpdateOrderStatus(ctx, repository.UpdateOrderStatusParams{
+			ID:     order.ID,
+			Status: repository.OrderStatusCANCELLED,
+		}); err != nil {
+			return fmt.Errorf("cancel expired order: %w", err)
+		}
+	}
+	return nil
 }
 
 func selectedAttributes(category repository.ProductCategory, productAttributes []byte, input map[string]string) ([]byte, error) {

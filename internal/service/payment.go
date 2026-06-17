@@ -34,6 +34,10 @@ var (
 
 type paymentRepository interface {
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (repository.Order, error)
+	LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Order, error)
+	LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Product, error)
+	IncrementProductStock(ctx context.Context, arg repository.IncrementProductStockParams) (repository.Product, error)
+	UpdateOrderStatus(ctx context.Context, arg repository.UpdateOrderStatusParams) (repository.Order, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.OrderItem, error)
 	GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (repository.Payment, error)
 	CreatePayment(ctx context.Context, arg repository.CreatePaymentParams) (repository.Payment, error)
@@ -284,6 +288,9 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, input InitiatePaym
 		return nil, ErrPaymentOrderNotPayable
 	}
 	if order.ExpiresAt.Valid && !s.now().Before(order.ExpiresAt.Time) {
+		if err := s.cancelExpiredOrder(ctx, order); err != nil {
+			return nil, err
+		}
 		return nil, ErrPaymentOrderExpired
 	}
 
@@ -366,6 +373,51 @@ func (s *PaymentService) InitiatePayment(ctx context.Context, input InitiatePaym
 		SnapRedirectURL: textOrEmpty(activePayment.SnapRedirectUrl),
 		ExpiresAt:       timestamptzPtr(order.ExpiresAt),
 	}, nil
+}
+
+func (s *PaymentService) cancelExpiredOrder(ctx context.Context, order repository.Order) error {
+	cancel := func(repo paymentRepository) error {
+		locked, err := repo.LockOrderByIDForUpdate(ctx, order.ID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPaymentOrderNotFound
+			}
+			return fmt.Errorf("lock expired payment order: %w", err)
+		}
+		if locked.Status != repository.OrderStatusPENDING {
+			return nil
+		}
+		if !locked.ExpiresAt.Valid || s.now().Before(locked.ExpiresAt.Time) {
+			return nil
+		}
+
+		items, err := repo.ListOrderItemsByOrderID(ctx, locked.ID)
+		if err != nil {
+			return fmt.Errorf("list expired payment order items: %w", err)
+		}
+		for _, item := range items {
+			if _, err := repo.LockProductByIDForUpdate(ctx, item.ProductID); err != nil {
+				return fmt.Errorf("lock expired payment order product: %w", err)
+			}
+			if _, err := repo.IncrementProductStock(ctx, repository.IncrementProductStockParams{
+				ID:       item.ProductID,
+				Quantity: item.Quantity,
+			}); err != nil {
+				return fmt.Errorf("restore expired payment order stock: %w", err)
+			}
+		}
+		if _, err := repo.UpdateOrderStatus(ctx, repository.UpdateOrderStatusParams{
+			ID:     locked.ID,
+			Status: repository.OrderStatusCANCELLED,
+		}); err != nil {
+			return fmt.Errorf("cancel expired payment order: %w", err)
+		}
+		return nil
+	}
+	if s.txRunner != nil {
+		return s.txRunner.Run(ctx, cancel)
+	}
+	return cancel(s.repo)
 }
 
 func (s *PaymentService) HandleWebhook(ctx context.Context, input WebhookInput) (*WebhookResult, error) {

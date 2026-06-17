@@ -39,6 +39,17 @@ WHERE o.user_id = $1
   AND o.status = 'PENDING'
   AND oi.cart_item_id = ANY($2::uuid[]);
 
+-- name: ListExpiredPendingOrdersByCartItemIDs :many
+SELECT DISTINCT o.*
+FROM public.orders o
+JOIN public.order_items oi ON oi.order_id = o.id
+WHERE o.user_id = $1
+  AND o.status = 'PENDING'
+  AND o.expires_at IS NOT NULL
+  AND o.expires_at <= $2
+  AND oi.cart_item_id = ANY($3::uuid[])
+ORDER BY o.created_at ASC, o.id ASC;
+
 -- name: AcquireOrderNumberDateLock :exec
 SELECT pg_advisory_xact_lock(hashtext($1));
 

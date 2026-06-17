@@ -85,16 +85,16 @@ type ListCheckoutCartItemsForUserParams struct {
 }
 
 type ListCheckoutCartItemsForUserRow struct {
-	CartItemID pgtype.UUID        `json:"cart_item_id"`
-	ProductID  pgtype.UUID        `json:"product_id"`
+	CartItemID  pgtype.UUID        `json:"cart_item_id"`
+	ProductID   pgtype.UUID        `json:"product_id"`
 	ProductName string             `json:"product_name"`
-	Price      int32              `json:"price"`
-	Category   ProductCategory    `json:"category"`
-	Status     ProductStatus      `json:"status"`
-	Attributes []byte             `json:"attributes"`
-	Stock      int32              `json:"stock"`
-	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
-	Quantity   int32              `json:"quantity"`
+	Price       int32              `json:"price"`
+	Category    ProductCategory    `json:"category"`
+	Status      ProductStatus      `json:"status"`
+	Attributes  []byte             `json:"attributes"`
+	Stock       int32              `json:"stock"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Quantity    int32              `json:"quantity"`
 }
 
 func (q *Queries) ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error) {
@@ -147,6 +147,54 @@ func (q *Queries) CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg C
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const listExpiredPendingOrdersByCartItemIDs = `-- name: ListExpiredPendingOrdersByCartItemIDs :many
+SELECT DISTINCT o.id, o.order_number, o.user_id, o.status, o.notes, o.total_amount, o.expires_at, o.created_at, o.updated_at
+FROM public.orders o
+JOIN public.order_items oi ON oi.order_id = o.id
+WHERE o.user_id = $1
+  AND o.status = 'PENDING'
+  AND o.expires_at IS NOT NULL
+  AND o.expires_at <= $2
+  AND oi.cart_item_id = ANY($3::uuid[])
+ORDER BY o.created_at ASC, o.id ASC
+`
+
+type ListExpiredPendingOrdersByCartItemIDsParams struct {
+	UserID      pgtype.UUID        `json:"user_id"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CartItemIds []pgtype.UUID      `json:"cart_item_ids"`
+}
+
+func (q *Queries) ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg ListExpiredPendingOrdersByCartItemIDsParams) ([]Order, error) {
+	rows, err := q.db.Query(ctx, listExpiredPendingOrdersByCartItemIDs, arg.UserID, arg.ExpiresAt, arg.CartItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Order{}
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNumber,
+			&i.UserID,
+			&i.Status,
+			&i.Notes,
+			&i.TotalAmount,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const acquireOrderNumberDateLock = `-- name: AcquireOrderNumberDateLock :exec

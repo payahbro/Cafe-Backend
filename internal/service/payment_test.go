@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -108,6 +109,47 @@ func TestPaymentServiceInitiateCreatesSnapTransaction(t *testing.T) {
 	}
 	if result.SnapRedirectURL != "https://app.sandbox.midtrans.com/snap/v2/vtweb/new" {
 		t.Fatalf("redirect url = %q", result.SnapRedirectURL)
+	}
+}
+
+func TestPaymentServiceInitiateCancelsExpiredOrderAndRestoresStock(t *testing.T) {
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	orderID := "44444444-4444-4444-8444-444444444444"
+	userID := "11111111-1111-4111-8111-111111111111"
+	productID := "33333333-3333-4333-8333-333333333333"
+	cartItemID := "22222222-2222-4222-8222-222222222222"
+	repo := &fakePaymentRepo{
+		order: paymentOrderRow(t, orderID, userID, "ORD-20260617-001", "PENDING", 68000, now.Add(-time.Minute)),
+		orderItems: []repository.OrderItem{
+			paymentOrderItemWithProductRow(t, "55555555-5555-4555-8555-555555555555", orderID, productID, cartItemID, "Americano", 34000, 2, 68000, now.Add(-16*time.Minute)),
+		},
+		lockedProducts: map[string]repository.Product{
+			productID: {ID: mustUUIDForPayment(t, productID), Stock: 5},
+		},
+		updatedOrder: paymentOrderRow(t, orderID, userID, "ORD-20260617-001", "CANCELLED", 68000, now.Add(-time.Minute)),
+	}
+	service := NewPaymentService(repo, &fakePaymentTxRunner{repo: repo}, &fakeSnapClient{}, nil, nil, PaymentServiceOptions{
+		Now: func() time.Time { return now },
+	})
+
+	_, err := service.InitiatePayment(context.Background(), InitiatePaymentInput{
+		OrderID:     orderID,
+		UserID:      userID,
+		UserRole:    string(repository.UserRoleCUSTOMER),
+		IsVerified:  true,
+		FullName:    "Budi",
+		Email:       "budi@example.test",
+		PhoneNumber: "+628123456789",
+	})
+
+	if !errors.Is(err, ErrPaymentOrderExpired) {
+		t.Fatalf("err = %v", err)
+	}
+	if !repo.incrementStockCalled {
+		t.Fatalf("expected expired order stock to be restored")
+	}
+	if !repo.updateOrderStatusCalled || repo.updateOrderStatusArg.Status != repository.OrderStatusCANCELLED {
+		t.Fatalf("expected order to be cancelled, arg=%+v", repo.updateOrderStatusArg)
 	}
 }
 
@@ -226,22 +268,27 @@ func (f *fakePaymentTxRunner) Run(ctx context.Context, fn func(paymentRepository
 }
 
 type fakePaymentRepo struct {
-	order            repository.Order
-	orderItems       []repository.OrderItem
-	activePayment    repository.Payment
-	payment          repository.Payment
-	updatedPayment   repository.Payment
-	createdPayment   repository.Payment
-	payments         []repository.Payment
-	createArg        repository.CreatePaymentParams
-	updateArg        repository.UpdatePaymentAfterWebhookParams
-	activePaymentErr error
-	orderErr         error
-	paymentErr       error
-	paymentsErr      error
-	createCalled     bool
-	updateCalled     bool
-	getPaymentCalled bool
+	order                   repository.Order
+	orderItems              []repository.OrderItem
+	lockedProducts          map[string]repository.Product
+	activePayment           repository.Payment
+	payment                 repository.Payment
+	updatedPayment          repository.Payment
+	createdPayment          repository.Payment
+	updatedOrder            repository.Order
+	payments                []repository.Payment
+	createArg               repository.CreatePaymentParams
+	updateArg               repository.UpdatePaymentAfterWebhookParams
+	updateOrderStatusArg    repository.UpdateOrderStatusParams
+	activePaymentErr        error
+	orderErr                error
+	paymentErr              error
+	paymentsErr             error
+	createCalled            bool
+	updateCalled            bool
+	getPaymentCalled        bool
+	incrementStockCalled    bool
+	updateOrderStatusCalled bool
 }
 
 func (f *fakePaymentRepo) GetOrderByID(ctx context.Context, id pgtype.UUID) (repository.Order, error) {
@@ -253,6 +300,31 @@ func (f *fakePaymentRepo) GetOrderByID(ctx context.Context, id pgtype.UUID) (rep
 
 func (f *fakePaymentRepo) ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]repository.OrderItem, error) {
 	return f.orderItems, nil
+}
+
+func (f *fakePaymentRepo) LockOrderByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Order, error) {
+	if f.orderErr != nil {
+		return repository.Order{}, f.orderErr
+	}
+	return f.order, nil
+}
+
+func (f *fakePaymentRepo) LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
+	if product, ok := f.lockedProducts[id.String()]; ok {
+		return product, nil
+	}
+	return repository.Product{}, nil
+}
+
+func (f *fakePaymentRepo) IncrementProductStock(ctx context.Context, arg repository.IncrementProductStockParams) (repository.Product, error) {
+	f.incrementStockCalled = true
+	return repository.Product{ID: arg.ID, Stock: arg.Quantity}, nil
+}
+
+func (f *fakePaymentRepo) UpdateOrderStatus(ctx context.Context, arg repository.UpdateOrderStatusParams) (repository.Order, error) {
+	f.updateOrderStatusCalled = true
+	f.updateOrderStatusArg = arg
+	return f.updatedOrder, nil
 }
 
 func (f *fakePaymentRepo) GetActivePaymentByOrderID(ctx context.Context, orderID pgtype.UUID) (repository.Payment, error) {
@@ -361,6 +433,14 @@ func paymentOrderItemRow(t *testing.T, itemID, orderID, productName string, pric
 		Subtotal:        subtotal,
 		CreatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
 	}
+}
+
+func paymentOrderItemWithProductRow(t *testing.T, itemID, orderID, productID, cartItemID, productName string, price, quantity, subtotal int32, createdAt time.Time) repository.OrderItem {
+	t.Helper()
+	row := paymentOrderItemRow(t, itemID, orderID, productName, price, quantity, subtotal, createdAt)
+	row.ProductID = mustUUIDForPayment(t, productID)
+	row.CartItemID = mustUUIDForPayment(t, cartItemID)
+	return row
 }
 
 func paymentRow(t *testing.T, paymentID, orderID, status string, amount int32, midtransOrderID, snapURL string, createdAt time.Time) repository.Payment {

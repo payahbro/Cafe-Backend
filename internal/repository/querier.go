@@ -41,6 +41,7 @@ type Querier interface {
 	IncrementProductTotalSold(ctx context.Context, arg IncrementProductTotalSoldParams) (Product, error)
 	ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error)
 	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error)
+	ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg ListExpiredPendingOrdersByCartItemIDsParams) ([]Order, error)
 	ListOrderItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]OrderItem, error)
 	ListOrders(ctx context.Context, arg ListOrdersParams) ([]ListOrdersRow, error)
 	ListOrdersByUserID(ctx context.Context, arg ListOrdersByUserIDParams) ([]Order, error)

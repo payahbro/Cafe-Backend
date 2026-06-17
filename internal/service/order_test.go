@@ -188,6 +188,75 @@ func TestOrderServiceCheckoutRejectsCartItemAlreadyInPendingOrder(t *testing.T) 
 	}
 }
 
+func TestOrderServiceCheckoutCancelsExpiredPendingOrderBeforePendingCheck(t *testing.T) {
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	userID := "11111111-1111-4111-8111-111111111111"
+	cartItemID := "22222222-2222-4222-8222-222222222222"
+	productID := "33333333-3333-4333-8333-333333333333"
+	expiredOrderID := "44444444-4444-4444-8444-444444444444"
+	newOrderID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	expiredOrder := orderRow(t, expiredOrderID, userID, "ORD-20260617-001", "PENDING", 25000, now.Add(-time.Minute))
+	expiredOrder.ExpiresAt = pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true}
+	txRepo := &fakeOrderRepo{
+		checkoutRows: []repository.ListCheckoutCartItemsForUserRow{
+			checkoutCartItemRow(t, cartItemID, productID, "Americano", "coffee", "available", 25000, 1, 10, false, `{"temperature":["iced"],"sizes":["medium"],"sugar_levels":["normal"],"ice_levels":["normal"]}`),
+		},
+		expiredOrders: []repository.Order{
+			expiredOrder,
+		},
+		order: expiredOrder,
+		orderItems: []repository.OrderItem{
+			orderItemRow(t, "55555555-5555-4555-8555-555555555555", expiredOrderID, productID, cartItemID, 1, 25000, now.Add(-16*time.Minute)),
+		},
+		lockedProducts: map[string]repository.Product{
+			productID: orderProductRow(t, productID, "Americano", "coffee", "available", 25000, 10, false, `{"temperature":["iced"],"sizes":["medium"],"sugar_levels":["normal"],"ice_levels":["normal"]}`),
+		},
+		createdOrder: repository.Order{
+			ID:          mustUUIDForOrder(t, newOrderID),
+			OrderNumber: "ORD-20260617-002",
+			UserID:      mustUUIDForOrder(t, userID),
+			Status:      repository.OrderStatusPENDING,
+			TotalAmount: 25000,
+			ExpiresAt:   pgtype.Timestamptz{Time: now.Add(15 * time.Minute), Valid: true},
+			CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+			UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		},
+		createdItems: []repository.OrderItem{
+			orderItemRow(t, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", newOrderID, productID, cartItemID, 1, 25000, now),
+		},
+	}
+	service := NewOrderService(txRepo, &fakeOrderTxRunner{repo: txRepo}, func() time.Time { return now })
+
+	order, err := service.Checkout(context.Background(), CheckoutInput{
+		UserID:      userID,
+		IsVerified:  true,
+		PhoneNumber: "+628123456789",
+		Items: []CheckoutItemInput{{
+			CartItemID: cartItemID,
+			Attributes: map[string]string{
+				"temperature": "iced",
+				"sizes":       "medium",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+
+	if order.ID != newOrderID {
+		t.Fatalf("new order id = %q", order.ID)
+	}
+	if !txRepo.incrementStockCalled {
+		t.Fatalf("expected expired order stock to be restored")
+	}
+	if !txRepo.expiredCancelCalled {
+		t.Fatalf("expected expired order to be cancelled")
+	}
+	if !txRepo.createOrderCalled {
+		t.Fatalf("expected new order to be created after lazy cancel")
+	}
+}
+
 func TestOrderServiceListOrdersRestrictsCustomerToOwnOrders(t *testing.T) {
 	userID := "11111111-1111-4111-8111-111111111111"
 	repo := &fakeOrderRepo{
@@ -435,35 +504,37 @@ func (f *fakeOrderTxRunner) Run(ctx context.Context, fn func(orderRepository) er
 }
 
 type fakeOrderRepo struct {
-	checkoutRows       []repository.ListCheckoutCartItemsForUserRow
-	lockedProducts    map[string]repository.Product
-	createdOrder      repository.Order
-	createdItems      []repository.OrderItem
-	listRows          []repository.ListOrdersRow
-	order             repository.Order
-	updatedOrder      repository.Order
-	orderItems        []repository.OrderItem
-	pendingCartItemCount int64
-	listArg           repository.ListOrdersParams
-	decrementArg      repository.DecrementProductStockParams
-	incrementStockArg repository.IncrementProductStockParams
-	incrementTotalSoldArg repository.IncrementProductTotalSoldParams
-	updateStatusArg   repository.UpdateOrderStatusParams
-	createOrderArg    repository.CreateOrderParams
-	createItemArgs    []repository.CreateOrderItemParams
-	getCheckoutErr    error
-	lockProductErr    error
-	decrementErr      error
-	createOrderErr    error
-	createItemErr     error
-	listErr           error
-	getOrderErr       error
-	listItemsErr      error
-	createOrderCalled bool
-	decrementCalled   bool
-	incrementStockCalled bool
+	checkoutRows             []repository.ListCheckoutCartItemsForUserRow
+	lockedProducts           map[string]repository.Product
+	createdOrder             repository.Order
+	createdItems             []repository.OrderItem
+	listRows                 []repository.ListOrdersRow
+	order                    repository.Order
+	updatedOrder             repository.Order
+	orderItems               []repository.OrderItem
+	expiredOrders            []repository.Order
+	pendingCartItemCount     int64
+	listArg                  repository.ListOrdersParams
+	decrementArg             repository.DecrementProductStockParams
+	incrementStockArg        repository.IncrementProductStockParams
+	incrementTotalSoldArg    repository.IncrementProductTotalSoldParams
+	updateStatusArg          repository.UpdateOrderStatusParams
+	createOrderArg           repository.CreateOrderParams
+	createItemArgs           []repository.CreateOrderItemParams
+	getCheckoutErr           error
+	lockProductErr           error
+	decrementErr             error
+	createOrderErr           error
+	createItemErr            error
+	listErr                  error
+	getOrderErr              error
+	listItemsErr             error
+	createOrderCalled        bool
+	decrementCalled          bool
+	incrementStockCalled     bool
 	incrementTotalSoldCalled bool
-	updateStatusCalled bool
+	updateStatusCalled       bool
+	expiredCancelCalled      bool
 }
 
 func (f *fakeOrderRepo) ListCheckoutCartItemsForUser(ctx context.Context, arg repository.ListCheckoutCartItemsForUserParams) ([]repository.ListCheckoutCartItemsForUserRow, error) {
@@ -483,6 +554,10 @@ func (f *fakeOrderRepo) CountOrdersByOrderNumberPrefix(ctx context.Context, pref
 
 func (f *fakeOrderRepo) CountPendingOrderItemsByCartItemIDs(ctx context.Context, arg repository.CountPendingOrderItemsByCartItemIDsParams) (int64, error) {
 	return f.pendingCartItemCount, nil
+}
+
+func (f *fakeOrderRepo) ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg repository.ListExpiredPendingOrdersByCartItemIDsParams) ([]repository.Order, error) {
+	return f.expiredOrders, nil
 }
 
 func (f *fakeOrderRepo) LockProductByIDForUpdate(ctx context.Context, id pgtype.UUID) (repository.Product, error) {
@@ -561,6 +636,9 @@ func (f *fakeOrderRepo) GetOrderByID(ctx context.Context, id pgtype.UUID) (repos
 func (f *fakeOrderRepo) UpdateOrderStatus(ctx context.Context, arg repository.UpdateOrderStatusParams) (repository.Order, error) {
 	f.updateStatusCalled = true
 	f.updateStatusArg = arg
+	if arg.Status == repository.OrderStatusCANCELLED {
+		f.expiredCancelCalled = true
+	}
 	return f.updatedOrder, nil
 }
 
@@ -605,15 +683,15 @@ func checkoutCartItemRow(t *testing.T, cartItemID, productID, productName, categ
 	t.Helper()
 
 	row := repository.ListCheckoutCartItemsForUserRow{
-		CartItemID: mustUUIDForOrder(t, cartItemID),
-		ProductID:  mustUUIDForOrder(t, productID),
+		CartItemID:  mustUUIDForOrder(t, cartItemID),
+		ProductID:   mustUUIDForOrder(t, productID),
 		ProductName: productName,
-		Price:      price,
-		Category:   repository.ProductCategory(category),
-		Status:     repository.ProductStatus(status),
-		Attributes: []byte(attributes),
-		Stock:      stock,
-		Quantity:   quantity,
+		Price:       price,
+		Category:    repository.ProductCategory(category),
+		Status:      repository.ProductStatus(status),
+		Attributes:  []byte(attributes),
+		Stock:       stock,
+		Quantity:    quantity,
 	}
 	if deleted {
 		row.DeletedAt = pgtype.Timestamptz{Time: time.Date(2026, 6, 14, 4, 0, 0, 0, time.UTC), Valid: true}
