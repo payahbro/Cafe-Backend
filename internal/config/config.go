@@ -16,6 +16,7 @@ type Config struct {
 	Internal InternalConfig
 	Supabase SupabaseConfig
 	Midtrans MidtransConfig
+	FCM      FCMConfig
 }
 
 type AppConfig struct {
@@ -72,6 +73,17 @@ type MidtransConfig struct {
 	SnapBaseURL string `env:"MIDTRANS_SNAP_BASE_URL" envDefault:"https://app.sandbox.midtrans.com"`
 	CoreBaseURL string `env:"MIDTRANS_CORE_BASE_URL" envDefault:"https://api.sandbox.midtrans.com"`
 	WebhookURL  string `env:"MIDTRANS_WEBHOOK_URL"`
+}
+
+type FCMConfig struct {
+	Enabled           bool   `env:"FCM_ENABLED" envDefault:"false"`
+	ProjectID         string `env:"FCM_PROJECT_ID"`
+	TopicNewProducts  string `env:"FCM_TOPIC_NEW_PRODUCTS" envDefault:"new-products"`
+	CredentialFile    string `env:"GOOGLE_APPLICATION_CREDENTIALS"`
+	BatchSize         int32  `env:"FCM_OUTBOX_BATCH_SIZE" envDefault:"10"`
+	PollSeconds       int    `env:"FCM_OUTBOX_POLL_SECONDS" envDefault:"30"`
+	MaxRetries        int32  `env:"FCM_OUTBOX_MAX_RETRIES" envDefault:"3"`
+	RetryDelaySeconds int    `env:"FCM_OUTBOX_RETRY_DELAY_SECONDS" envDefault:"60"`
 }
 
 func Load() (Config, error) {

@@ -6,9 +6,11 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/worker ./cmd/worker
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /bin/api /api
+COPY --from=builder /bin/worker /worker
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/api"]

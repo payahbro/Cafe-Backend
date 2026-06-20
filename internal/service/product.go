@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,6 +34,7 @@ type productRepository interface {
 	GetProductByNameCI(ctx context.Context, lower string) (repository.Product, error)
 	CreateProduct(ctx context.Context, arg repository.CreateProductParams) (repository.Product, error)
 	CreateProductWithDefaultStock(ctx context.Context, arg repository.CreateProductWithDefaultStockParams) (repository.Product, error)
+	CreateOutboxEvent(ctx context.Context, arg repository.CreateOutboxEventParams) (repository.OutboxEvent, error)
 	UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error)
 	UpdateProductStatus(ctx context.Context, arg repository.UpdateProductStatusParams) (repository.Product, error)
 	SoftDeleteProduct(ctx context.Context, id pgtype.UUID) (repository.Product, error)
@@ -119,6 +121,14 @@ type UpdateProductInput struct {
 type UpdateProductStatusInput struct {
 	Status    string
 	ActorRole string
+}
+
+type ProductCreatedNotificationPayload struct {
+	Type      string `json:"type"`
+	ProductID string `json:"product_id"`
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	ImageURL  string `json:"image_url"`
 }
 
 func NewProductService(repo productRepository, txRunner productTxRunner, cache ProductCacheInvalidator) *ProductService {
@@ -284,6 +294,10 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 			return fmt.Errorf("create product: %w", err)
 		}
 
+		if err := createProductCreatedOutboxEvent(ctx, repo, created); err != nil {
+			return err
+		}
+
 		row = created
 		return nil
 	})
@@ -297,6 +311,39 @@ func (s *ProductService) CreateProduct(ctx context.Context, input CreateProductI
 	}
 
 	return &product, nil
+}
+
+func createProductCreatedOutboxEvent(ctx context.Context, repo productRepository, product repository.Product) error {
+	payload, err := json.Marshal(productCreatedNotificationPayload(product))
+	if err != nil {
+		return fmt.Errorf("marshal product created payload: %w", err)
+	}
+
+	if _, err := repo.CreateOutboxEvent(ctx, repository.CreateOutboxEventParams{
+		AggregateType: "product",
+		AggregateID:   product.ID,
+		EventType:     "product.created",
+		Payload:       payload,
+	}); err != nil {
+		return fmt.Errorf("create product created outbox event: %w", err)
+	}
+
+	return nil
+}
+
+func productCreatedNotificationPayload(product repository.Product) ProductCreatedNotificationPayload {
+	imageURL := ""
+	if product.ImageUrl.Valid {
+		imageURL = product.ImageUrl.String
+	}
+
+	return ProductCreatedNotificationPayload{
+		Type:      "product_created",
+		ProductID: product.ID.String(),
+		Name:      product.Name,
+		Category:  string(product.Category),
+		ImageURL:  imageURL,
+	}
 }
 
 func (s *ProductService) UpdateProduct(ctx context.Context, productID string, input UpdateProductInput) (*Product, error) {

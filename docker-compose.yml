@@ -27,31 +27,39 @@ services:
       redis:
         condition: service_healthy
 
-  product-seed:
-    image: postgres:16-alpine
-    container_name: cafe-product-seed
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cafe-worker
+    entrypoint: ["/worker"]
     env_file:
       - .env
     environment:
+      REDIS_ADDR: "redis:6379"
+      DB_REQUIRED: "true"
+      FCM_ENABLED: "${FCM_ENABLED:-false}"
+      FCM_PROJECT_ID: "${FCM_PROJECT_ID:-cafeflow-demo}"
+      FCM_TOPIC_NEW_PRODUCTS: "${FCM_TOPIC_NEW_PRODUCTS:-new-products}"
+      GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/firebase-service-account.json"
+      FCM_OUTBOX_BATCH_SIZE: "${FCM_OUTBOX_BATCH_SIZE:-10}"
+      FCM_OUTBOX_POLL_SECONDS: "${FCM_OUTBOX_POLL_SECONDS:-30}"
+      FCM_OUTBOX_MAX_RETRIES: "${FCM_OUTBOX_MAX_RETRIES:-3}"
+      FCM_OUTBOX_RETRY_DELAY_SECONDS: "${FCM_OUTBOX_RETRY_DELAY_SECONDS:-60}"
       SUPABASE_DB_HOST: "${SUPABASE_DB_HOST:-aws-1-ap-northeast-2.pooler.supabase.com}"
       SUPABASE_DB_PORT: "${SUPABASE_DB_PORT:-5432}"
       SUPABASE_DB_NAME: "${SUPABASE_DB_NAME:-postgres}"
       SUPABASE_DB_USER: "${SUPABASE_DB_USER:-postgres.<project-ref>}"
-      PGPASSWORD: "${SUPABASE_DB_PASSWORD:-<your-password>}"
-      PGSSLMODE: "${SUPABASE_DB_SSLMODE:-require}"
+      SUPABASE_DB_PASSWORD: "${SUPABASE_DB_PASSWORD:-<your-password>}"
+      SUPABASE_DB_SSLMODE: "${SUPABASE_DB_SSLMODE:-require}"
     volumes:
-      - ./internal/db/seeds:/seeds:ro
-    command:
-      - sh
-      - -c
-      - >
-        psql
-        -h "$${SUPABASE_DB_HOST}"
-        -p "$${SUPABASE_DB_PORT}"
-        -U "$${SUPABASE_DB_USER}"
-        -d "$${SUPABASE_DB_NAME}"
-        -v ON_ERROR_STOP=1
-        -f /seeds/products.sql
+      - type: bind
+        source: ${FIREBASE_CREDENTIALS_HOST_PATH:-./firebase-service-account.json}
+        target: /run/secrets/firebase-service-account.json
+        read_only: true
+    depends_on:
+      redis:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine

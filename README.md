@@ -76,6 +76,7 @@ Semua API Golang berada di base path ` /api/v1 `.
 Endpoint via Golang API:
 
 - `POST /auth/register`
+- `GET /users` (Pegawai/Admin)
 - `GET /users/profile`
 - `PATCH /users/profile`
 

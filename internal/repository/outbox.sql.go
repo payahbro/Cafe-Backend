@@ -58,13 +58,20 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 }
 
 const lockPendingOutboxEvents = `-- name: LockPendingOutboxEvents :many
-SELECT id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, next_retry_at, last_error, created_at, updated_at
-FROM public.outbox_events
-WHERE status IN ('PENDING', 'RETRY')
-  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-ORDER BY created_at ASC
-LIMIT $1
-FOR UPDATE SKIP LOCKED
+WITH locked AS (
+    SELECT id
+    FROM public.outbox_events
+    WHERE status IN ('PENDING', 'RETRY')
+      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+    ORDER BY created_at ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE public.outbox_events
+SET status = 'PROCESSING'
+FROM locked
+WHERE public.outbox_events.id = locked.id
+RETURNING public.outbox_events.id, public.outbox_events.aggregate_type, public.outbox_events.aggregate_id, public.outbox_events.event_type, public.outbox_events.payload, public.outbox_events.status, public.outbox_events.retry_count, public.outbox_events.next_retry_at, public.outbox_events.last_error, public.outbox_events.created_at, public.outbox_events.updated_at
 `
 
 func (q *Queries) LockPendingOutboxEvents(ctx context.Context, limit int32) ([]OutboxEvent, error) {
@@ -122,7 +129,7 @@ WHERE id = $1
 type MarkOutboxRetryParams struct {
 	ID          pgtype.UUID        `json:"id"`
 	NextRetryAt pgtype.Timestamptz `json:"next_retry_at"`
-	Status      OutboxStatus       `json:"status"`
+	Dead        bool               `json:"dead"`
 	LastError   pgtype.Text        `json:"last_error"`
 }
 
@@ -130,7 +137,7 @@ func (q *Queries) MarkOutboxRetry(ctx context.Context, arg MarkOutboxRetryParams
 	_, err := q.db.Exec(ctx, markOutboxRetry,
 		arg.ID,
 		arg.NextRetryAt,
-		arg.Status,
+		arg.Dead,
 		arg.LastError,
 	)
 	return err

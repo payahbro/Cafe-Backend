@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"testing"
@@ -395,6 +396,92 @@ func TestProductServiceCreateProductUsesDatabaseDefaultStockWhenMissing(t *testi
 	}
 	if txRepo.createDefaultStockArg.Name != "Americano" {
 		t.Fatalf("create name = %q", txRepo.createDefaultStockArg.Name)
+	}
+}
+
+func TestProductServiceCreateProductWritesDynamicProductCreatedOutboxEvent(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	created := productRow(t, "11111111-1111-4111-8111-111111111111", "Nasi Goreng", createdAt)
+	created.Category = repository.ProductCategorySnack
+	created.ImageUrl = pgtype.Text{String: "https://example.supabase.co/storage/v1/object/public/products/nasi-goreng.png", Valid: true}
+	txRepo := &fakeProductRepo{
+		getByNameErr: pgx.ErrNoRows,
+		product:      created,
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	service := NewProductService(&fakeProductRepo{}, txRunner, nil)
+
+	_, err := service.CreateProduct(context.Background(), CreateProductInput{
+		Name:       "Nasi Goreng",
+		Price:      22000,
+		Category:   "snack",
+		ImageURL:   "https://example.supabase.co/storage/v1/object/public/products/nasi-goreng.png",
+		Attributes: []byte(`{"portions":["regular"]}`),
+	})
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	if !txRepo.outboxCalled {
+		t.Fatalf("expected product.created outbox event")
+	}
+	if txRepo.outboxArg.AggregateType != "product" {
+		t.Fatalf("aggregate type = %q", txRepo.outboxArg.AggregateType)
+	}
+	if txRepo.outboxArg.AggregateID.String() != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("aggregate id = %q", txRepo.outboxArg.AggregateID.String())
+	}
+	if txRepo.outboxArg.EventType != "product.created" {
+		t.Fatalf("event type = %q", txRepo.outboxArg.EventType)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(txRepo.outboxArg.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["type"] != "product_created" {
+		t.Fatalf("payload type = %q", payload["type"])
+	}
+	if payload["product_id"] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("payload product_id = %q", payload["product_id"])
+	}
+	if payload["name"] != "Nasi Goreng" {
+		t.Fatalf("payload name = %q", payload["name"])
+	}
+	if payload["category"] != "snack" {
+		t.Fatalf("payload category = %q", payload["category"])
+	}
+	if payload["image_url"] != "https://example.supabase.co/storage/v1/object/public/products/nasi-goreng.png" {
+		t.Fatalf("payload image_url = %q", payload["image_url"])
+	}
+}
+
+func TestProductServiceCreateProductReturnsErrorWhenOutboxWriteFails(t *testing.T) {
+	createdAt := time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC)
+	txRepo := &fakeProductRepo{
+		getByNameErr: pgx.ErrNoRows,
+		product:      productRow(t, "11111111-1111-4111-8111-111111111111", "Americano", createdAt),
+		outboxErr:    errors.New("outbox unavailable"),
+	}
+	txRunner := &fakeProductTxRunner{repo: txRepo}
+	cache := &fakeProductCacheInvalidator{}
+	service := NewProductService(&fakeProductRepo{}, txRunner, cache)
+
+	_, err := service.CreateProduct(context.Background(), CreateProductInput{
+		Name:       "Americano",
+		Price:      25000,
+		Category:   "coffee",
+		ImageURL:   "https://example.supabase.co/storage/v1/object/public/products/americano.png",
+		Attributes: []byte(`{"temperature":["hot"],"sugar_levels":["normal"],"ice_levels":["normal"],"sizes":["medium"]}`),
+	})
+	if err == nil {
+		t.Fatalf("expected create product to fail when outbox write fails")
+	}
+	if !txRepo.outboxCalled {
+		t.Fatalf("expected outbox write attempt")
+	}
+	if cache.invalidated {
+		t.Fatalf("cache should not be invalidated when transaction fails")
 	}
 }
 
@@ -934,6 +1021,7 @@ type fakeProductRepo struct {
 	listArg                   repository.ListProductsParams
 	createArg                 repository.CreateProductParams
 	createDefaultStockArg     repository.CreateProductWithDefaultStockParams
+	outboxArg                 repository.CreateOutboxEventParams
 	updateArg                 repository.UpdateProductParams
 	updateStatusArg           repository.UpdateProductStatusParams
 	deletedID                 pgtype.UUID
@@ -943,10 +1031,12 @@ type fakeProductRepo struct {
 	getIncludingDeletedCalled bool
 	createCalled              bool
 	createDefaultStockCalled  bool
+	outboxCalled              bool
 	updateCalled              bool
 	updateStatusCalled        bool
 	deleteCalled              bool
 	restoreCalled             bool
+	outboxErr                 error
 }
 
 func (f *fakeProductRepo) ListProducts(ctx context.Context, arg repository.ListProductsParams) ([]repository.Product, error) {
@@ -1003,6 +1093,15 @@ func (f *fakeProductRepo) CreateProductWithDefaultStock(ctx context.Context, arg
 		return repository.Product{}, f.err
 	}
 	return f.product, nil
+}
+
+func (f *fakeProductRepo) CreateOutboxEvent(ctx context.Context, arg repository.CreateOutboxEventParams) (repository.OutboxEvent, error) {
+	f.outboxCalled = true
+	f.outboxArg = arg
+	if f.outboxErr != nil {
+		return repository.OutboxEvent{}, f.outboxErr
+	}
+	return repository.OutboxEvent{AggregateType: arg.AggregateType, AggregateID: arg.AggregateID, EventType: arg.EventType, Payload: arg.Payload}, nil
 }
 
 func (f *fakeProductRepo) UpdateProduct(ctx context.Context, arg repository.UpdateProductParams) (repository.Product, error) {

@@ -13,13 +13,20 @@ INSERT INTO public.outbox_events (
 RETURNING *;
 
 -- name: LockPendingOutboxEvents :many
-SELECT *
-FROM public.outbox_events
-WHERE status IN ('PENDING', 'RETRY')
-  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-ORDER BY created_at ASC
-LIMIT $1
-FOR UPDATE SKIP LOCKED;
+WITH locked AS (
+    SELECT id
+    FROM public.outbox_events
+    WHERE status IN ('PENDING', 'RETRY')
+      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+    ORDER BY created_at ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE public.outbox_events
+SET status = 'PROCESSING'
+FROM locked
+WHERE public.outbox_events.id = locked.id
+RETURNING public.outbox_events.*;
 
 -- name: MarkOutboxProcessing :exec
 UPDATE public.outbox_events
