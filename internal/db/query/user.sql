@@ -11,6 +11,19 @@ SELECT
 FROM public.users
 WHERE id = $1;
 
+-- name: ListUsers :many
+SELECT
+    id::text,
+    email,
+    full_name,
+    role,
+    is_verified,
+    is_active,
+    avatar_url,
+    phone_number
+FROM public.users
+ORDER BY created_at DESC;
+
 -- name: UpdateUserProfile :one
 UPDATE public.users
 SET

@@ -14,11 +14,12 @@ import (
 )
 
 type UserHandler struct {
-	userService profileUpdater
+	userService userService
 	supabaseURL string
 }
 
-type profileUpdater interface {
+type userService interface {
+	ListUsers(ctx context.Context) ([]service.UserProfile, error)
 	UpdateProfile(ctx context.Context, input service.UpdateProfileInput) (*service.UserProfile, error)
 }
 
@@ -39,8 +40,27 @@ type UpdateProfileRequest struct {
 	AvatarURL   *string `json:"avatar_url"`
 }
 
-func NewUserHandler(userService profileUpdater, supabaseURL string) *UserHandler {
+func NewUserHandler(userService userService, supabaseURL string) *UserHandler {
 	return &UserHandler{userService: userService, supabaseURL: supabaseURL}
+}
+
+func (h *UserHandler) ListUsers(c *gin.Context) {
+	if h.userService == nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "User service unavailable", nil)
+		return
+	}
+
+	users, err := h.userService.ListUsers(c.Request.Context())
+	if err != nil {
+		dto.WriteError(c, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Terjadi kesalahan internal", nil)
+		return
+	}
+
+	responses := make([]UserProfileResponse, 0, len(users))
+	for _, user := range users {
+		responses = append(responses, profileResponse(&user))
+	}
+	dto.WriteSuccess(c, http.StatusOK, responses, "Daftar user berhasil diambil")
 }
 
 func (h *UserHandler) GetProfile(c *gin.Context) {

@@ -40,6 +40,7 @@ type Querier interface {
 	GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdRow, error)
 	IncrementProductStock(ctx context.Context, arg IncrementProductStockParams) (Product, error)
 	IncrementProductTotalSold(ctx context.Context, arg IncrementProductTotalSoldParams) (Product, error)
+	ListUsers(ctx context.Context) ([]ListUsersRow, error)
 	ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error)
 	ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error)
 	ListExpiredPendingOrdersByCartItemIDs(ctx context.Context, arg ListExpiredPendingOrdersByCartItemIDsParams) ([]Order, error)

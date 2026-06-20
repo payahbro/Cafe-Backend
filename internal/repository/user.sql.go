@@ -52,6 +52,60 @@ func (q *Queries) GetUserById(ctx context.Context, id pgtype.UUID) (GetUserByIdR
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT
+    id::text,
+    email,
+    full_name,
+    role,
+    is_verified,
+    is_active,
+    avatar_url,
+    phone_number
+FROM public.users
+ORDER BY created_at DESC
+`
+
+type ListUsersRow struct {
+	ID          string      `json:"id"`
+	Email       string      `json:"email"`
+	FullName    string      `json:"full_name"`
+	Role        UserRole    `json:"role"`
+	IsVerified  bool        `json:"is_verified"`
+	IsActive    bool        `json:"is_active"`
+	AvatarUrl   pgtype.Text `json:"avatar_url"`
+	PhoneNumber pgtype.Text `json:"phone_number"`
+}
+
+func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsersRow{}
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.FullName,
+			&i.Role,
+			&i.IsVerified,
+			&i.IsActive,
+			&i.AvatarUrl,
+			&i.PhoneNumber,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE public.users
 SET

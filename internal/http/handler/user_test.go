@@ -166,6 +166,61 @@ func TestUserHandlerUpdateProfileReturnsUpdatedProfile(t *testing.T) {
 	}
 }
 
+func TestUserHandlerListUsersReturnsUsers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	avatarURL := "https://example.supabase.co/storage/v1/object/public/avatars/admin.png"
+	userHandler := NewUserHandler(fakeUserLister{
+		users: []service.UserProfile{
+			{
+				ID:          "11111111-1111-4111-8111-111111111111",
+				Email:       "admin@cafe.test",
+				FullName:    "Admin Cafe",
+				PhoneNumber: "+628111111111",
+				Role:        "ADMIN",
+				IsVerified:  true,
+				IsActive:    true,
+				AvatarURL:   &avatarURL,
+			},
+			{
+				ID:         "22222222-2222-4222-8222-222222222222",
+				Email:      "staff@cafe.test",
+				FullName:   "Staff Cafe",
+				Role:       "PEGAWAI",
+				IsVerified: true,
+				IsActive:   true,
+			},
+		},
+	}, "https://example.supabase.co")
+	router.GET("/users", userHandler.ListUsers)
+
+	req := httptest.NewRequest(http.MethodGet, "/users", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+
+	body := resp.Body.String()
+	for _, want := range []string{
+		`"success":true`,
+		`"id":"11111111-1111-4111-8111-111111111111"`,
+		`"email":"admin@cafe.test"`,
+		`"role":"ADMIN"`,
+		`"phone_number":"+628111111111"`,
+		`"avatar_url":"https://example.supabase.co/storage/v1/object/public/avatars/admin.png"`,
+		`"id":"22222222-2222-4222-8222-222222222222"`,
+		`"role":"PEGAWAI"`,
+		`"message":"Daftar user berhasil diambil"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response body missing %s: %s", want, body)
+		}
+	}
+}
+
 func TestUserHandlerGetProfileRequiresAuthenticatedUserContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -187,9 +242,29 @@ type fakeProfileUpdater struct {
 	err     error
 }
 
+func (f fakeProfileUpdater) ListUsers(context.Context) ([]service.UserProfile, error) {
+	return nil, nil
+}
+
 func (f fakeProfileUpdater) UpdateProfile(context.Context, service.UpdateProfileInput) (*service.UserProfile, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.profile, nil
+}
+
+type fakeUserLister struct {
+	users []service.UserProfile
+	err   error
+}
+
+func (f fakeUserLister) ListUsers(context.Context) ([]service.UserProfile, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.users, nil
+}
+
+func (f fakeUserLister) UpdateProfile(context.Context, service.UpdateProfileInput) (*service.UserProfile, error) {
+	return nil, nil
 }

@@ -89,6 +89,7 @@ func New(cfg config.Config, log *zap.Logger, dbPool *pgxpool.Pool, redisClient *
 	// user
 	v1Users := v1.Group("/users")
 	v1Users.Use(middleware.AuthRequired(jwtVerifier, repo))
+	v1Users.GET("", middleware.RequireRoles(repository.UserRolePEGAWAI, repository.UserRoleADMIN), userHandler.ListUsers)
 	v1Users.GET("/profile", userHandler.GetProfile)
 	v1Users.PATCH("/profile", userHandler.UpdateProfile)
 

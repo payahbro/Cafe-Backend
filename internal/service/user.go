@@ -12,7 +12,12 @@ import (
 )
 
 type UserService struct {
-	repo repository.Querier
+	repo userRepository
+}
+
+type userRepository interface {
+	ListUsers(ctx context.Context) ([]repository.ListUsersRow, error)
+	UpdateUserProfile(ctx context.Context, arg repository.UpdateUserProfileParams) (repository.UpdateUserProfileRow, error)
 }
 
 type UpdateProfileInput struct {
@@ -22,8 +27,25 @@ type UpdateProfileInput struct {
 	AvatarURL   *string
 }
 
-func NewUserService(repo repository.Querier) *UserService {
+func NewUserService(repo userRepository) *UserService {
 	return &UserService{repo: repo}
+}
+
+func (s *UserService) ListUsers(ctx context.Context) ([]UserProfile, error) {
+	if s.repo == nil {
+		return nil, errors.New("database repository missing")
+	}
+
+	rows, err := s.repo.ListUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+
+	users := make([]UserProfile, 0, len(rows))
+	for _, row := range rows {
+		users = append(users, userProfileFromListRow(row))
+	}
+	return users, nil
 }
 
 func (s *UserService) UpdateProfile(ctx context.Context, input UpdateProfileInput) (*UserProfile, error) {
@@ -45,6 +67,19 @@ func (s *UserService) UpdateProfile(ctx context.Context, input UpdateProfileInpu
 	}
 
 	return userProfileFromRow(row), nil
+}
+
+func userProfileFromListRow(row repository.ListUsersRow) UserProfile {
+	return UserProfile{
+		ID:          row.ID,
+		Email:       row.Email,
+		FullName:    row.FullName,
+		PhoneNumber: textOrEmpty(row.PhoneNumber),
+		Role:        string(row.Role),
+		IsVerified:  row.IsVerified,
+		IsActive:    row.IsActive,
+		AvatarURL:   textPtr(row.AvatarUrl),
+	}
 }
 
 func optionalText(value *string) pgtype.Text {
