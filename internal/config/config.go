@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	env "github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
@@ -27,7 +28,7 @@ type AppConfig struct {
 }
 
 type HTTPConfig struct {
-	Port string `env:"APP_PORT" envDefault:"8080"`
+	Port string `env:"APP_PORT"`
 }
 
 type LogConfig struct {
@@ -96,7 +97,16 @@ func Load() (Config, error) {
 	}
 
 	if cfg.HTTP.Port == "" {
+		cfg.HTTP.Port = os.Getenv("PORT")
+	}
+	if cfg.HTTP.Port == "" {
+		cfg.HTTP.Port = "8080"
+	}
+	if cfg.HTTP.Port == "" {
 		return Config{}, fmt.Errorf("APP_PORT cannot be empty")
+	}
+	if cfg.Database.Required && cfg.DatabaseURL() == "" {
+		return Config{}, fmt.Errorf("database connection is required when DB_REQUIRED=true")
 	}
 
 	return cfg, nil

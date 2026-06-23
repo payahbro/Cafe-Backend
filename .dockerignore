@@ -1,0 +1,17 @@
+.git
+.gocache
+.idea
+.agents
+.codex
+
+.env
+.env.*
+!.env.example
+
+*.exe
+*.test
+*.log
+
+docs
+firebase-service-account.json
+skills-lock.json

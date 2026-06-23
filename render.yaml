@@ -1,0 +1,47 @@
+services:
+  - type: web
+    runtime: docker
+    name: cafetelkom-api
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: APP_ENV
+        value: production
+      - key: APP_VERSION
+        value: render
+      - key: LOG_LEVEL
+        value: info
+      - key: REDIS_ADDR
+        value: ""
+      - key: REDIS_REQUIRED
+        value: false
+      - key: DB_REQUIRED
+        value: true
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: INTERNAL_API_KEY
+        generateValue: true
+      - key: MIDTRANS_ENV
+        value: sandbox
+      - key: MIDTRANS_CLIENT_KEY
+        sync: false
+      - key: MIDTRANS_SERVER_KEY
+        sync: false
+      - key: MIDTRANS_SNAP_BASE_URL
+        value: https://app.sandbox.midtrans.com
+      - key: MIDTRANS_CORE_BASE_URL
+        value: https://api.sandbox.midtrans.com
+      - key: MIDTRANS_WEBHOOK_URL
+        sync: false
+      - key: FCM_ENABLED
+        value: false
