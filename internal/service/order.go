@@ -307,7 +307,15 @@ func (s *OrderService) Checkout(ctx context.Context, input CheckoutInput) (*Orde
 				return ErrOrderInsufficientStock
 			}
 
-			attrs, err := selectedAttributes(row.Category, row.Attributes, inputItem.Attributes)
+			attributeInput := inputItem.Attributes
+			if len(row.SelectedAttributes) > 0 && string(row.SelectedAttributes) != "{}" {
+				attributeInput = map[string]string{}
+				if err := json.Unmarshal(row.SelectedAttributes, &attributeInput); err != nil {
+					return ErrOrderValidation
+				}
+			}
+
+			attrs, err := selectedAttributes(row.Category, row.Attributes, attributeInput)
 			if err != nil {
 				return err
 			}

@@ -23,7 +23,8 @@ SELECT
     p.attributes,
     p.stock,
     p.deleted_at,
-    ci.quantity
+    ci.quantity,
+    ci.selected_attributes
 FROM public.cart_items ci
 JOIN public.carts c ON c.id = ci.cart_id
 JOIN public.products p ON p.id = ci.product_id

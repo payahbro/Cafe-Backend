@@ -57,10 +57,12 @@ CREATE TABLE public.cart_items (
     cart_id UUID NOT NULL,
     product_id UUID NOT NULL,
     quantity INTEGER NOT NULL,
+    selected_attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    attributes_key VARCHAR(64) NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT cart_items_quantity_positive CHECK (quantity > 0),
-    CONSTRAINT cart_items_cart_product_unique UNIQUE (cart_id, product_id),
+    CONSTRAINT cart_items_cart_product_attributes_unique UNIQUE (cart_id, product_id, attributes_key),
     CONSTRAINT cart_items_cart_fk FOREIGN KEY (cart_id) REFERENCES public.carts(id) ON DELETE CASCADE,
     CONSTRAINT cart_items_product_fk FOREIGN KEY (product_id) REFERENCES public.products(id)
 );

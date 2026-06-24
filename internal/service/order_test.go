@@ -19,9 +19,11 @@ func TestOrderServiceCheckoutCreatesPendingOrderWithSnapshotsAndDefaults(t *test
 	productID := "33333333-3333-4333-8333-333333333333"
 	orderID := "44444444-4444-4444-8444-444444444444"
 	orderItemID := "55555555-5555-4555-8555-555555555555"
+	checkoutRow := checkoutCartItemRow(t, cartItemID, productID, "Americano", "coffee", "available", 25000, 2, 10, false, `{"temperature":["hot","iced"],"sizes":["small","medium"],"sugar_levels":["normal","less"],"ice_levels":["normal","less"]}`)
+	checkoutRow.SelectedAttributes = []byte(`{"ice_levels":"normal","sizes":"medium","sugar_levels":"normal","temperature":"iced"}`)
 	txRepo := &fakeOrderRepo{
 		checkoutRows: []repository.ListCheckoutCartItemsForUserRow{
-			checkoutCartItemRow(t, cartItemID, productID, "Americano", "coffee", "available", 25000, 2, 10, false, `{"temperature":["hot","iced"],"sizes":["small","medium"],"sugar_levels":["normal","less"],"ice_levels":["normal","less"]}`),
+			checkoutRow,
 		},
 		lockedProducts: map[string]repository.Product{
 			productID: orderProductRow(t, productID, "Americano", "coffee", "available", 25000, 10, false, `{"temperature":["hot","iced"],"sizes":["small","medium"],"sugar_levels":["normal","less"],"ice_levels":["normal","less"]}`),
@@ -65,8 +67,8 @@ func TestOrderServiceCheckoutCreatesPendingOrderWithSnapshotsAndDefaults(t *test
 			{
 				CartItemID: cartItemID,
 				Attributes: map[string]string{
-					"temperature": "iced",
-					"sizes":       "medium",
+					"temperature": "hot",
+					"sizes":       "small",
 				},
 			},
 		},

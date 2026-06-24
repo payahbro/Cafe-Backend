@@ -36,6 +36,9 @@ func TestCartHandlerGetCartReturnsAuthenticatedCustomerCart(t *testing.T) {
 					Quantity:    2,
 					Subtotal:    50000,
 					IsAvailable: true,
+					SelectedAttributes: []byte(
+						`{"sizes":"medium","temperature":"iced"}`,
+					),
 				},
 			},
 			GrandTotal: 50000,
@@ -60,6 +63,7 @@ func TestCartHandlerGetCartReturnsAuthenticatedCustomerCart(t *testing.T) {
 		`"success":true`,
 		`"cart_id":"22222222-2222-4222-8222-222222222222"`,
 		`"name":"Americano"`,
+		`"selected_attributes":{"sizes":"medium","temperature":"iced"}`,
 		`"grand_total":50000`,
 		`"message":"Cart berhasil diambil"`,
 	} {
@@ -85,7 +89,7 @@ func TestCartHandlerAddItemPassesDeltaQuantityToService(t *testing.T) {
 	cartHandler := NewCartHandler(fakeService)
 	router.POST("/cart/items", authenticatedCustomerMiddleware(), cartHandler.AddItem)
 
-	req := httptest.NewRequest(http.MethodPost, "/cart/items", strings.NewReader(`{"product_id":"44444444-4444-4444-8444-444444444444","quantity":2}`))
+	req := httptest.NewRequest(http.MethodPost, "/cart/items", strings.NewReader(`{"product_id":"44444444-4444-4444-8444-444444444444","quantity":2,"attributes":{"temperature":"iced","sizes":"medium"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
@@ -101,6 +105,10 @@ func TestCartHandlerAddItemPassesDeltaQuantityToService(t *testing.T) {
 	}
 	if fakeService.addInput.Quantity != 2 {
 		t.Fatalf("quantity = %d", fakeService.addInput.Quantity)
+	}
+	if fakeService.addInput.Attributes["temperature"] != "iced" ||
+		fakeService.addInput.Attributes["sizes"] != "medium" {
+		t.Fatalf("attributes = %#v", fakeService.addInput.Attributes)
 	}
 	if !strings.Contains(resp.Body.String(), `"message":"Item berhasil ditambahkan ke cart"`) {
 		t.Fatalf("response body = %s", resp.Body.String())

@@ -12,27 +12,37 @@ import (
 )
 
 const addOrIncrementCartItem = `-- name: AddOrIncrementCartItem :one
-INSERT INTO public.cart_items (cart_id, product_id, quantity)
-VALUES ($1, $2, $3)
-ON CONFLICT (cart_id, product_id)
+INSERT INTO public.cart_items (
+    cart_id,
+    product_id,
+    quantity,
+    selected_attributes,
+    attributes_key
+)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (cart_id, product_id, attributes_key)
 DO UPDATE SET quantity = public.cart_items.quantity + EXCLUDED.quantity
-RETURNING id, cart_id, product_id, quantity, created_at, updated_at
+RETURNING id, cart_id, product_id, quantity, selected_attributes, attributes_key, created_at, updated_at
 `
 
 type AddOrIncrementCartItemParams struct {
-	CartID    pgtype.UUID `json:"cart_id"`
-	ProductID pgtype.UUID `json:"product_id"`
-	Quantity  int32       `json:"quantity"`
+	CartID             pgtype.UUID `json:"cart_id"`
+	ProductID          pgtype.UUID `json:"product_id"`
+	Quantity           int32       `json:"quantity"`
+	SelectedAttributes []byte      `json:"selected_attributes"`
+	AttributesKey      string      `json:"attributes_key"`
 }
 
 func (q *Queries) AddOrIncrementCartItem(ctx context.Context, arg AddOrIncrementCartItemParams) (CartItem, error) {
-	row := q.db.QueryRow(ctx, addOrIncrementCartItem, arg.CartID, arg.ProductID, arg.Quantity)
+	row := q.db.QueryRow(ctx, addOrIncrementCartItem, arg.CartID, arg.ProductID, arg.Quantity, arg.SelectedAttributes, arg.AttributesKey)
 	var i CartItem
 	err := row.Scan(
 		&i.ID,
 		&i.CartID,
 		&i.ProductID,
 		&i.Quantity,
+		&i.SelectedAttributes,
+		&i.AttributesKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -156,6 +166,7 @@ const listCartItemsByCartID = `-- name: ListCartItemsByCartID :many
 SELECT
     ci.id AS item_id,
     ci.product_id,
+    ci.selected_attributes,
     p.name,
     p.image_url,
     p.price,
@@ -169,14 +180,15 @@ ORDER BY ci.created_at ASC, ci.id ASC
 `
 
 type ListCartItemsByCartIDRow struct {
-	ItemID    pgtype.UUID        `json:"item_id"`
-	ProductID pgtype.UUID        `json:"product_id"`
-	Name      string             `json:"name"`
-	ImageUrl  pgtype.Text        `json:"image_url"`
-	Price     int32              `json:"price"`
-	Quantity  int32              `json:"quantity"`
-	Status    ProductStatus      `json:"status"`
-	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ItemID             pgtype.UUID        `json:"item_id"`
+	ProductID          pgtype.UUID        `json:"product_id"`
+	SelectedAttributes []byte             `json:"selected_attributes"`
+	Name               string             `json:"name"`
+	ImageUrl           pgtype.Text        `json:"image_url"`
+	Price              int32              `json:"price"`
+	Quantity           int32              `json:"quantity"`
+	Status             ProductStatus      `json:"status"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
 }
 
 func (q *Queries) ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID) ([]ListCartItemsByCartIDRow, error) {
@@ -191,6 +203,7 @@ func (q *Queries) ListCartItemsByCartID(ctx context.Context, cartID pgtype.UUID)
 		if err := rows.Scan(
 			&i.ItemID,
 			&i.ProductID,
+			&i.SelectedAttributes,
 			&i.Name,
 			&i.ImageUrl,
 			&i.Price,

@@ -282,12 +282,14 @@ type Cart struct {
 }
 
 type CartItem struct {
-	ID        pgtype.UUID        `json:"id"`
-	CartID    pgtype.UUID        `json:"cart_id"`
-	ProductID pgtype.UUID        `json:"product_id"`
-	Quantity  int32              `json:"quantity"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	CartID             pgtype.UUID        `json:"cart_id"`
+	ProductID          pgtype.UUID        `json:"product_id"`
+	Quantity           int32              `json:"quantity"`
+	SelectedAttributes []byte             `json:"selected_attributes"`
+	AttributesKey      string             `json:"attributes_key"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Order struct {

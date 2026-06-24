@@ -7,6 +7,7 @@ WHERE user_id = $1;
 SELECT
     ci.id AS item_id,
     ci.product_id,
+    ci.selected_attributes,
     p.name,
     p.image_url,
     p.price,
@@ -24,9 +25,15 @@ VALUES ($1)
 RETURNING *;
 
 -- name: AddOrIncrementCartItem :one
-INSERT INTO public.cart_items (cart_id, product_id, quantity)
-VALUES ($1, $2, $3)
-ON CONFLICT (cart_id, product_id)
+INSERT INTO public.cart_items (
+    cart_id,
+    product_id,
+    quantity,
+    selected_attributes,
+    attributes_key
+)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (cart_id, product_id, attributes_key)
 DO UPDATE SET quantity = public.cart_items.quantity + EXCLUDED.quantity
 RETURNING *;
 

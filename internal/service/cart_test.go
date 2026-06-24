@@ -12,6 +12,62 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+func TestPrepareCartItemAttributesCanonicalizesSelectedOptions(t *testing.T) {
+	product := productRow(
+		t,
+		"44444444-4444-4444-8444-444444444444",
+		"Miso",
+		time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
+	)
+	product.Category = repository.ProductCategoryFood
+	product.Attributes = []byte(`{"portions":["regular","large"],"spicy_levels":["no_spicy","hot"]}`)
+
+	raw, key, err := prepareCartItemAttributes(product, map[string]string{
+		"spicy_levels": "hot",
+		"portions":     "large",
+	})
+	if err != nil {
+		t.Fatalf("prepare attributes: %v", err)
+	}
+
+	if got, want := string(raw), `{"portions":"large","spicy_levels":"hot"}`; got != want {
+		t.Fatalf("attributes = %s, want %s", got, want)
+	}
+	if key == "" {
+		t.Fatal("attributes key must not be empty")
+	}
+}
+
+func TestPrepareCartItemAttributesUsesDifferentKeysForDifferentOptions(t *testing.T) {
+	product := productRow(
+		t,
+		"44444444-4444-4444-8444-444444444444",
+		"Miso",
+		time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
+	)
+	product.Category = repository.ProductCategoryFood
+	product.Attributes = []byte(`{"portions":["regular","large"],"spicy_levels":["no_spicy","hot"]}`)
+
+	_, regularKey, err := prepareCartItemAttributes(product, map[string]string{
+		"portions":     "regular",
+		"spicy_levels": "no_spicy",
+	})
+	if err != nil {
+		t.Fatalf("prepare regular attributes: %v", err)
+	}
+	_, largeKey, err := prepareCartItemAttributes(product, map[string]string{
+		"portions":     "large",
+		"spicy_levels": "hot",
+	})
+	if err != nil {
+		t.Fatalf("prepare large attributes: %v", err)
+	}
+
+	if regularKey == largeKey {
+		t.Fatalf("different options produced the same key %q", regularKey)
+	}
+}
+
 func TestCartServiceGetCartMapsItemsAndTotalsOnlyAvailableProducts(t *testing.T) {
 	updatedAt := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 	userID := "11111111-1111-4111-8111-111111111111"
@@ -90,6 +146,7 @@ func TestCartServiceAddItemCreatesCartAndReturnsUpdatedCart(t *testing.T) {
 		cart:       cartRow(t, cartID, userID, updatedAt),
 		product:    productRow(t, productID, "Americano", updatedAt),
 	}
+	txRepo.product.Attributes = []byte(`{"temperature":["hot","iced"],"sizes":["small","medium"],"sugar_levels":["normal","less"],"ice_levels":["normal","less"]}`)
 	baseRepo := &fakeCartRepo{
 		cart: cartRow(t, cartID, userID, updatedAt),
 		items: []repository.ListCartItemsByCartIDRow{
@@ -102,6 +159,10 @@ func TestCartServiceAddItemCreatesCartAndReturnsUpdatedCart(t *testing.T) {
 	cart, err := service.AddItem(context.Background(), userID, AddCartItemInput{
 		ProductID: productID,
 		Quantity:  2,
+		Attributes: map[string]string{
+			"temperature": "iced",
+			"sizes":       "medium",
+		},
 	})
 	if err != nil {
 		t.Fatalf("add item: %v", err)
@@ -121,6 +182,12 @@ func TestCartServiceAddItemCreatesCartAndReturnsUpdatedCart(t *testing.T) {
 	}
 	if txRepo.addItemArg.ProductID.String() != productID {
 		t.Fatalf("added product id = %q", txRepo.addItemArg.ProductID.String())
+	}
+	if got, want := string(txRepo.addItemArg.SelectedAttributes), `{"ice_levels":"normal","sizes":"medium","sugar_levels":"normal","temperature":"iced"}`; got != want {
+		t.Fatalf("selected attributes = %s, want %s", got, want)
+	}
+	if txRepo.addItemArg.AttributesKey == "" {
+		t.Fatal("attributes key must not be empty")
 	}
 	if !txRepo.touchCartCalled {
 		t.Fatalf("expected cart updated_at to be touched")
@@ -515,13 +582,14 @@ func cartItemRow(t *testing.T, itemID, productID, name, status string, price, qu
 	}
 
 	row := repository.ListCartItemsByCartIDRow{
-		ItemID:    itemUUID,
-		ProductID: productUUID,
-		Name:      name,
-		ImageUrl:  pgtype.Text{String: "https://example.supabase.co/storage/v1/object/public/products/" + name + ".png", Valid: true},
-		Price:     price,
-		Quantity:  quantity,
-		Status:    repository.ProductStatus(status),
+		ItemID:             itemUUID,
+		ProductID:          productUUID,
+		SelectedAttributes: []byte(`{"sizes":"medium","temperature":"iced"}`),
+		Name:               name,
+		ImageUrl:           pgtype.Text{String: "https://example.supabase.co/storage/v1/object/public/products/" + name + ".png", Valid: true},
+		Price:              price,
+		Quantity:           quantity,
+		Status:             repository.ProductStatus(status),
 	}
 	if deleted {
 		row.DeletedAt = pgtype.Timestamptz{Time: time.Date(2026, 6, 13, 11, 0, 0, 0, time.UTC), Valid: true}

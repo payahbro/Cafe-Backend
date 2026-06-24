@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -22,6 +24,7 @@ var (
 	ErrCartItemNotFound       = errors.New("cart item not found")
 	ErrCartProductUnavailable = errors.New("cart product unavailable")
 	ErrCartProductOutOfStock  = errors.New("cart product out of stock")
+	ErrInvalidCartAttributes  = errors.New("invalid cart attributes")
 )
 
 type cartRepository interface {
@@ -60,19 +63,21 @@ type Cart struct {
 }
 
 type CartItem struct {
-	ItemID      string
-	ProductID   string
-	Name        string
-	ImageURL    *string
-	Price       int32
-	Quantity    int32
-	Subtotal    int32
-	IsAvailable bool
+	ItemID             string
+	ProductID          string
+	Name               string
+	ImageURL           *string
+	Price              int32
+	Quantity           int32
+	Subtotal           int32
+	IsAvailable        bool
+	SelectedAttributes []byte
 }
 
 type AddCartItemInput struct {
-	ProductID string
-	Quantity  int32
+	ProductID  string
+	Quantity   int32
+	Attributes map[string]string
 }
 
 type UpdateCartItemInput struct {
@@ -167,6 +172,11 @@ func (s *CartService) AddItem(ctx context.Context, userID string, input AddCartI
 			return ErrCartProductOutOfStock
 		}
 
+		selectedAttributes, attributesKey, err := prepareCartItemAttributes(product, input.Attributes)
+		if err != nil {
+			return err
+		}
+
 		cart, err := repo.GetCartByUserID(ctx, userUUID)
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
@@ -184,9 +194,11 @@ func (s *CartService) AddItem(ctx context.Context, userID string, input AddCartI
 		}
 
 		if _, err := repo.AddOrIncrementCartItem(ctx, repository.AddOrIncrementCartItemParams{
-			CartID:    cart.ID,
-			ProductID: productUUID,
-			Quantity:  input.Quantity,
+			CartID:             cart.ID,
+			ProductID:          productUUID,
+			Quantity:           input.Quantity,
+			SelectedAttributes: selectedAttributes,
+			AttributesKey:      attributesKey,
 		}); err != nil {
 			return fmt.Errorf("add cart item: %w", err)
 		}
@@ -372,18 +384,29 @@ func cartFromRows(cart repository.Cart, rows []repository.ListCartItemsByCartIDR
 			result.GrandTotal += subtotal
 		}
 		result.Items = append(result.Items, CartItem{
-			ItemID:      row.ItemID.String(),
-			ProductID:   row.ProductID.String(),
-			Name:        row.Name,
-			ImageURL:    textPtr(row.ImageUrl),
-			Price:       row.Price,
-			Quantity:    row.Quantity,
-			Subtotal:    subtotal,
-			IsAvailable: isAvailable,
+			ItemID:             row.ItemID.String(),
+			ProductID:          row.ProductID.String(),
+			Name:               row.Name,
+			ImageURL:           textPtr(row.ImageUrl),
+			Price:              row.Price,
+			Quantity:           row.Quantity,
+			Subtotal:           subtotal,
+			IsAvailable:        isAvailable,
+			SelectedAttributes: row.SelectedAttributes,
 		})
 	}
 
 	return result
+}
+
+func prepareCartItemAttributes(product repository.Product, input map[string]string) ([]byte, string, error) {
+	raw, err := selectedAttributes(product.Category, product.Attributes, input)
+	if err != nil {
+		return nil, "", ErrInvalidCartAttributes
+	}
+
+	sum := sha256.Sum256(raw)
+	return raw, hex.EncodeToString(sum[:]), nil
 }
 
 func parseRequiredUUID(value string) (pgtype.UUID, error) {

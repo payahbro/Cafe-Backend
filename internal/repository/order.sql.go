@@ -73,7 +73,8 @@ SELECT
     p.attributes,
     p.stock,
     p.deleted_at,
-    ci.quantity
+    ci.quantity,
+    ci.selected_attributes
 FROM public.cart_items ci
 JOIN public.carts c ON c.id = ci.cart_id
 JOIN public.products p ON p.id = ci.product_id
@@ -89,16 +90,17 @@ type ListCheckoutCartItemsForUserParams struct {
 }
 
 type ListCheckoutCartItemsForUserRow struct {
-	CartItemID  pgtype.UUID        `json:"cart_item_id"`
-	ProductID   pgtype.UUID        `json:"product_id"`
-	ProductName string             `json:"product_name"`
-	Price       int32              `json:"price"`
-	Category    ProductCategory    `json:"category"`
-	Status      ProductStatus      `json:"status"`
-	Attributes  []byte             `json:"attributes"`
-	Stock       int32              `json:"stock"`
-	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
-	Quantity    int32              `json:"quantity"`
+	CartItemID         pgtype.UUID        `json:"cart_item_id"`
+	ProductID          pgtype.UUID        `json:"product_id"`
+	ProductName        string             `json:"product_name"`
+	Price              int32              `json:"price"`
+	Category           ProductCategory    `json:"category"`
+	Status             ProductStatus      `json:"status"`
+	Attributes         []byte             `json:"attributes"`
+	Stock              int32              `json:"stock"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	Quantity           int32              `json:"quantity"`
+	SelectedAttributes []byte             `json:"selected_attributes"`
 }
 
 func (q *Queries) ListCheckoutCartItemsForUser(ctx context.Context, arg ListCheckoutCartItemsForUserParams) ([]ListCheckoutCartItemsForUserRow, error) {
@@ -121,6 +123,7 @@ func (q *Queries) ListCheckoutCartItemsForUser(ctx context.Context, arg ListChec
 			&i.Stock,
 			&i.DeletedAt,
 			&i.Quantity,
+			&i.SelectedAttributes,
 		); err != nil {
 			return nil, err
 		}

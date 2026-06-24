@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -29,8 +30,9 @@ type cartManager interface {
 }
 
 type AddCartItemRequest struct {
-	ProductID string `json:"product_id"`
-	Quantity  int32  `json:"quantity"`
+	ProductID  string            `json:"product_id"`
+	Quantity   int32             `json:"quantity"`
+	Attributes map[string]string `json:"attributes"`
 }
 
 type UpdateCartItemRequest struct {
@@ -50,14 +52,15 @@ type CartResponse struct {
 }
 
 type CartItemResponse struct {
-	ItemID      string  `json:"item_id"`
-	ProductID   string  `json:"product_id"`
-	Name        string  `json:"name"`
-	ImageURL    *string `json:"image_url"`
-	Price       int32   `json:"price"`
-	Quantity    int32   `json:"quantity"`
-	Subtotal    int32   `json:"subtotal"`
-	IsAvailable bool    `json:"is_available"`
+	ItemID             string          `json:"item_id"`
+	ProductID          string          `json:"product_id"`
+	Name               string          `json:"name"`
+	ImageURL           *string         `json:"image_url"`
+	Price              int32           `json:"price"`
+	Quantity           int32           `json:"quantity"`
+	Subtotal           int32           `json:"subtotal"`
+	IsAvailable        bool            `json:"is_available"`
+	SelectedAttributes json.RawMessage `json:"selected_attributes"`
 }
 
 func NewCartHandler(cartService cartManager, internalAPIKey ...string) *CartHandler {
@@ -110,14 +113,21 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 	}
 
 	req.ProductID = strings.TrimSpace(req.ProductID)
+	if req.Attributes == nil {
+		req.Attributes = map[string]string{}
+	}
+	for key, value := range req.Attributes {
+		req.Attributes[key] = strings.TrimSpace(value)
+	}
 	if validationErrors := validateAddCartItemRequest(req); len(validationErrors) > 0 {
 		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", validationErrors)
 		return
 	}
 
 	cart, err := h.cartService.AddItem(c.Request.Context(), user.ID, service.AddCartItemInput{
-		ProductID: req.ProductID,
-		Quantity:  req.Quantity,
+		ProductID:  req.ProductID,
+		Quantity:   req.Quantity,
+		Attributes: req.Attributes,
 	})
 	if err != nil {
 		writeCartServiceError(c, err)
@@ -280,7 +290,7 @@ func validateClearInternalCartItemsRequest(req ClearInternalCartItemsRequest) ma
 
 func writeCartServiceError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, service.ErrInvalidCartProductID), errors.Is(err, service.ErrInvalidCartItemID), errors.Is(err, service.ErrInvalidCartQuantity), errors.Is(err, service.ErrInvalidCartUserID):
+	case errors.Is(err, service.ErrInvalidCartProductID), errors.Is(err, service.ErrInvalidCartItemID), errors.Is(err, service.ErrInvalidCartQuantity), errors.Is(err, service.ErrInvalidCartUserID), errors.Is(err, service.ErrInvalidCartAttributes):
 		dto.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Input tidak valid", nil)
 	case errors.Is(err, service.ErrCartProductNotFound):
 		dto.WriteError(c, http.StatusNotFound, "PRODUCT_NOT_FOUND", "Produk tidak ditemukan", nil)
@@ -302,14 +312,15 @@ func cartResponse(cart *service.Cart) CartResponse {
 	items := make([]CartItemResponse, 0, len(cart.Items))
 	for _, item := range cart.Items {
 		items = append(items, CartItemResponse{
-			ItemID:      item.ItemID,
-			ProductID:   item.ProductID,
-			Name:        item.Name,
-			ImageURL:    item.ImageURL,
-			Price:       item.Price,
-			Quantity:    item.Quantity,
-			Subtotal:    item.Subtotal,
-			IsAvailable: item.IsAvailable,
+			ItemID:             item.ItemID,
+			ProductID:          item.ProductID,
+			Name:               item.Name,
+			ImageURL:           item.ImageURL,
+			Price:              item.Price,
+			Quantity:           item.Quantity,
+			Subtotal:           item.Subtotal,
+			IsAvailable:        item.IsAvailable,
+			SelectedAttributes: jsonAttributes(item.SelectedAttributes),
 		})
 	}
 	return CartResponse{
